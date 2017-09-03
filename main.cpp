@@ -4,6 +4,7 @@
 #include <iomanip>
 #include <iostream>
 #include "benchmark/benchmark.h"
+#include "yuxin.hpp"
 
 constexpr size_t kDefaultAlignment = 64;
 
@@ -290,9 +291,10 @@ __attribute__((noinline)) __m256i xnor_popcnt_AVX2_lookup2x2(const uint8_t* A0,
 }
 
 // template <size_t M, size_t N>
-// __attribute__((noinline)) __m256i xnor_popcnt_AVX2_lookup1x4(
-//     const uint8_t *A, const uint8_t *B0, const uint8_t *B1, const uint8_t
-//     *B2, const uint8_t *B3, const size_t qk) {
+// __attribute__((noinline)) __m256i xnor_popcnt_AVX2_lookupMxN(const uint8_t* A,
+//                                                              const uint8_t* B,
+//                                                              const uint32_t* C,
+//                                                              const size_t qk) {
 //   assert(qk % 32 == 0);
 //   size_t i = 0;
 
@@ -706,6 +708,23 @@ static void BM_qxnor_popcnt2x2(benchmark::State& state) {
 }
 
 template <size_t M, size_t N>
+static void BM_qxnor_popcnt2x2_conv3x3(benchmark::State& state) {
+  size_t QK = state.range(0);
+  std::vector<uint8_t, AlignedAllocator<uint8_t>> A(M * 3 * 3 * QK);
+  std::vector<uint8_t, AlignedAllocator<uint8_t>> B(N * 3 * 3 * QK);
+  std::vector<uint32_t> C(M * N);
+
+  size_t iters = 0;
+  while (state.KeepRunning()) {
+    qxnor_popcnt2x2<M, N>(A.data(), B.data(), C.data(), N, QK * 3 * 3);
+    ++iters;
+  }
+
+  state.counters["FLOPS"] = benchmark::Counter(
+      2 * M * N * QK * 8 * 3 * 3 * iters, benchmark::Counter::kIsRate);
+}
+
+template <size_t M, size_t N>
 static void BM_qxnor_popcnt_hs(benchmark::State& state) {
   size_t QK = state.range(0);
   std::vector<uint8_t, AlignedAllocator<uint8_t>> A(M * QK);
@@ -740,6 +759,48 @@ static void BM_qgess_blocked(benchmark::State& state) {
 }
 
 template <size_t M, size_t N>
+static void BM_yuxin_conv(benchmark::State& state) {
+  size_t QK = state.range(0);
+  BitTensor X(1, 1, M, QK * 8);
+  BitTensor W(N, 1, 1, QK * 8);
+  BitTensor Y(1, 1, M, N);
+  size_t iters = 0;
+  while (state.KeepRunning()) {
+    const size_t ops = conv(W, X, Y);
+    // if (ops != 2 * M * N * QK * 8) {
+    //   std::cerr << "Ops: " << ops << ", expected: " << 2 * M * N * QK * 8 << std::endl;
+    //   throw std::runtime_error("Mismatch");
+    // }
+    ++iters;
+  }
+
+  state.counters["FLOPS"] = benchmark::Counter(2 * M * N * QK * 8 * iters,
+                                               benchmark::Counter::kIsRate);
+}
+
+size_t divRoundUp(size_t a, size_t b) { return (a + (b - 1)) / b; }
+
+template <size_t M, size_t N>
+static void BM_yuxin_conv3x3(benchmark::State& state) {
+  size_t QK = state.range(0);
+  BitTensor X(1, M, M, QK * 8);
+  BitTensor W(N, 3, 3, QK * 8);
+  BitTensor Y(1, M, M, N);
+  size_t iters = 0;
+  while (state.KeepRunning()) {
+    const size_t ops = conv(W, X, Y);
+    // if (ops != 2 * M * M * N * QK * 8 * 3 * 3) {
+    //   std::cerr << "Ops: " << ops << ", expected: " << 2 * M * M * N * QK * 8 * 3 * 3 <<
+    //   std::endl; throw std::runtime_error("Mismatch");
+    // }
+    ++iters;
+  }
+
+  state.counters["FLOPS"] = benchmark::Counter(2 * M * M * N * QK * 8 * 3 * 3 * iters,
+                                               benchmark::Counter::kIsRate);
+}
+
+template <size_t M, size_t N>
 static void BM_sgemm(benchmark::State& state) {
   size_t QK = state.range(0);
   std::vector<float, AlignedAllocator<float>> A(M * QK * 8);
@@ -758,7 +819,7 @@ static void BM_sgemm(benchmark::State& state) {
 }
 
 constexpr size_t kQKLowerBound = 64;
-constexpr size_t kQKUpperBound = 8192;
+constexpr size_t kQKUpperBound = 512;
 
 BENCHMARK_TEMPLATE2(BM_qxnor_popcnt, 2, 2)
     ->RangeMultiplier(2)
@@ -817,9 +878,42 @@ BENCHMARK_TEMPLATE2(BM_qxnor_popcnt2x2, 64, 64)
     ->RangeMultiplier(2)
     ->Range(kQKLowerBound, kQKUpperBound);
 
-BENCHMARK_TEMPLATE2(BM_qxnor_popcnt2x2, 256, 256)
+// BENCHMARK_TEMPLATE2(BM_yuxin_conv, 8, 8)
+//     ->RangeMultiplier(2)
+//     ->Range(kQKLowerBound, kQKUpperBound);
+// BENCHMARK_TEMPLATE2(BM_yuxin_conv, 16, 16)
+//     ->RangeMultiplier(2)
+//     ->Range(kQKLowerBound, kQKUpperBound);
+// BENCHMARK_TEMPLATE2(BM_yuxin_conv, 32, 32)
+//     ->RangeMultiplier(2)
+//     ->Range(kQKLowerBound, kQKUpperBound);
+// BENCHMARK_TEMPLATE2(BM_yuxin_conv, 64, 64)
+//     ->RangeMultiplier(2)
+//     ->Range(kQKLowerBound, kQKUpperBound);
+
+BENCHMARK_TEMPLATE2(BM_qxnor_popcnt2x2_conv3x3, 16, 16)
     ->RangeMultiplier(2)
-    ->Range(kQKLowerBound, kQKUpperBound);
+    ->Range(kQKLowerBound, kQKUpperBound / 2);
+BENCHMARK_TEMPLATE2(BM_qxnor_popcnt2x2_conv3x3, 32, 32)
+    ->RangeMultiplier(2)
+    ->Range(kQKLowerBound, kQKUpperBound / 2);
+BENCHMARK_TEMPLATE2(BM_qxnor_popcnt2x2_conv3x3, 64, 64)
+    ->RangeMultiplier(2)
+    ->Range(kQKLowerBound, kQKUpperBound / 2);
+
+// BENCHMARK_TEMPLATE2(BM_yuxin_conv3x3, 16, 16)
+//     ->RangeMultiplier(2)
+//     ->Range(kQKLowerBound, kQKUpperBound / 2);
+// BENCHMARK_TEMPLATE2(BM_yuxin_conv3x3, 32, 32)
+//     ->RangeMultiplier(2)
+//     ->Range(kQKLowerBound, kQKUpperBound / 2);
+// BENCHMARK_TEMPLATE2(BM_yuxin_conv3x3, 64, 64)
+//     ->RangeMultiplier(2)
+//     ->Range(kQKLowerBound, kQKUpperBound / 2);
+
+// BENCHMARK_TEMPLATE2(BM_qxnor_popcnt2x2, 256, 256)
+//     ->RangeMultiplier(2)
+//     ->Range(kQKLowerBound, kQKUpperBound);
 
 BENCHMARK_TEMPLATE2(BM_sgemm, 32, 32)
     ->RangeMultiplier(2)
