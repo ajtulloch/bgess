@@ -8,7 +8,7 @@
 
 constexpr size_t kDefaultAlignment = 64;
 
-template <class T, size_t kAlignment=kDefaultAlignment>
+template <class T, size_t kAlignment = kDefaultAlignment>
 struct AlignedAllocator {
   typedef T value_type;
 
@@ -33,21 +33,24 @@ struct AlignedAllocator {
 
 namespace AVX2_harley_seal {
 
-__attribute__((always_inline)) static __m256i popcount(const __m256i v) {
-  __m256i lookup1 =
-      _mm256_setr_epi8(4, 5, 5, 6, 5, 6, 6, 7, 5, 6, 6, 7, 6, 7, 7, 8, 4, 5, 5,
-                       6, 5, 6, 6, 7, 5, 6, 6, 7, 6, 7, 7, 8);
+__attribute__((always_inline)) static __m256i popcount(const __m256i vec) {
+  const __m256i lookup = _mm256_setr_epi8(
+      /* 0 */ 0, /* 1 */ 1, /* 2 */ 1, /* 3 */ 2,
+      /* 4 */ 1, /* 5 */ 2, /* 6 */ 2, /* 7 */ 3,
+      /* 8 */ 1, /* 9 */ 2, /* a */ 2, /* b */ 3,
+      /* c */ 2, /* d */ 3, /* e */ 3, /* f */ 4,
 
-  __m256i lookup2 =
-      _mm256_setr_epi8(4, 3, 3, 2, 3, 2, 2, 1, 3, 2, 2, 1, 2, 1, 1, 0, 4, 3, 3,
-                       2, 3, 2, 2, 1, 3, 2, 2, 1, 2, 1, 1, 0);
+      /* 0 */ 0, /* 1 */ 1, /* 2 */ 1, /* 3 */ 2,
+      /* 4 */ 1, /* 5 */ 2, /* 6 */ 2, /* 7 */ 3,
+      /* 8 */ 1, /* 9 */ 2, /* a */ 2, /* b */ 3,
+      /* c */ 2, /* d */ 3, /* e */ 3, /* f */ 4);
 
-  __m256i low_mask = _mm256_set1_epi8(0x0f);
-  __m256i lo = v & low_mask;
-  __m256i hi = _mm256_srli_epi16(v, 4) & low_mask;
-  __m256i popcnt1 = _mm256_shuffle_epi8(lookup1, lo);
-  __m256i popcnt2 = _mm256_shuffle_epi8(lookup2, hi);
-  return _mm256_sad_epu8(popcnt1, popcnt2);
+  const __m256i low_mask = _mm256_set1_epi8(0x0f);
+  const __m256i lo = _mm256_and_si256(vec, low_mask);
+  const __m256i hi = _mm256_and_si256(_mm256_srli_epi16(vec, 4), low_mask);
+  const __m256i popcnt1 = _mm256_shuffle_epi8(lookup, lo);
+  const __m256i popcnt2 = _mm256_shuffle_epi8(lookup, hi);
+  return _mm256_add_epi8(popcnt1, popcnt2);
 }
 
 static __attribute__((always_inline)) void CSA256(__m256i* h, __m256i* l,
@@ -59,46 +62,41 @@ static __attribute__((always_inline)) void CSA256(__m256i* h, __m256i* l,
 }
 
 uint64_t popcnt2(const __m256i* A, const __m256i* B, const uint64_t size) {
+  // ASSUME: total redictuion is less than 8192 bits (since we accumulate up to
+  // 2^8 in each 8 bit unit.)
   A = (const __m256i*)__builtin_assume_aligned(A, kDefaultAlignment);
   B = (const __m256i*)__builtin_assume_aligned(B, kDefaultAlignment);
+  __m256i zero = _mm256_setzero_si256();
   __m256i total = _mm256_setzero_si256();
+  __m256i local = _mm256_setzero_si256();
   __m256i ones = _mm256_setzero_si256();
   __m256i twos = _mm256_setzero_si256();
   __m256i fours = _mm256_setzero_si256();
   __m256i eights = _mm256_setzero_si256();
-  __m256i sixteens = _mm256_setzero_si256();
-  __m256i twosA, twosB, foursA, foursB, eightsA, eightsB;
+  __m256i twosA, twosB, foursA, foursB;
 
-  const uint64_t limit = size - size % 16;
+  const uint64_t limit = size - size % 8;
   uint64_t i = 0;
 
-  for (; i < limit; i += 16) {
+  for (; i < limit; i += 8) {
     CSA256(&twosA, &ones, ones, A[i + 0] ^ B[i + 0], A[i + 1] ^ B[i + 1]);
     CSA256(&twosB, &ones, ones, A[i + 2] ^ B[i + 2], A[i + 3] ^ B[i + 3]);
     CSA256(&foursA, &twos, twos, twosA, twosB);
     CSA256(&twosA, &ones, ones, A[i + 4] ^ B[i + 4], A[i + 5] ^ B[i + 5]);
     CSA256(&twosB, &ones, ones, A[i + 6] ^ B[i + 6], A[i + 7] ^ B[i + 7]);
     CSA256(&foursB, &twos, twos, twosA, twosB);
-    CSA256(&eightsA, &fours, fours, foursA, foursB);
-    CSA256(&twosA, &ones, ones, A[i + 8] ^ B[i + 8], A[i + 9] ^ B[i + 9]);
-    CSA256(&twosB, &ones, ones, A[i + 10] ^ B[i + 10], A[i + 11] ^ B[i + 11]);
-    CSA256(&foursA, &twos, twos, twosA, twosB);
-    CSA256(&twosA, &ones, ones, A[i + 12] ^ B[i + 12], A[i + 13] ^ B[i + 13]);
-    CSA256(&twosB, &ones, ones, A[i + 14] ^ B[i + 14], A[i + 15] ^ B[i + 15]);
-    CSA256(&foursB, &twos, twos, twosA, twosB);
-    CSA256(&eightsB, &fours, fours, foursA, foursB);
-    CSA256(&sixteens, &eights, eights, eightsA, eightsB);
-    total = _mm256_add_epi64(total, popcount(sixteens));
+    CSA256(&eights, &fours, fours, foursA, foursB);
+    local = _mm256_add_epi64(local, popcount(eights));
   }
-
-  total = _mm256_slli_epi64(total, 4);  // * 16
+  total = _mm256_sad_epu8(local, zero);
+  total = _mm256_slli_epi64(total, 3);  // * 8
   total = _mm256_add_epi64(
-      total, _mm256_slli_epi64(popcount(eights), 3));  // += 8 * ...
+      total, _mm256_slli_epi64(_mm256_sad_epu8(popcount(fours), zero),
+                               2));  // += 4 * ...
   total = _mm256_add_epi64(
-      total, _mm256_slli_epi64(popcount(fours), 2));  // += 4 * ...
-  total = _mm256_add_epi64(total,
-                           _mm256_slli_epi64(popcount(twos), 1));  // += 2 * ...
-  total = _mm256_add_epi64(total, popcount(ones));
+      total, _mm256_slli_epi64(_mm256_sad_epu8(popcount(twos), zero),
+                               1));  // += 2 * ...
+  total = _mm256_add_epi64(total, _mm256_sad_epu8(popcount(ones), zero));
 
   for (; i < size; i++) total = _mm256_add_epi64(total, popcount(A[i] ^ B[i]));
 
@@ -109,9 +107,11 @@ uint64_t popcnt2(const __m256i* A, const __m256i* B, const uint64_t size) {
 }
 
 uint64_t popcnt(const __m256i* A, const __m256i* B, const uint64_t size) {
+  // ASSUME: size < 8192 (since we accumulate up to 2^8 in each 8 bit unit, which is )
   A = (const __m256i*)__builtin_assume_aligned(A, kDefaultAlignment);
   B = (const __m256i*)__builtin_assume_aligned(B, kDefaultAlignment);
-
+  __m256i zero = _mm256_setzero_si256();
+  __m256i local = _mm256_setzero_si256();
   __m256i total = _mm256_setzero_si256();
   __m256i ones = _mm256_setzero_si256();
   __m256i twos = _mm256_setzero_si256();
@@ -139,18 +139,21 @@ uint64_t popcnt(const __m256i* A, const __m256i* B, const uint64_t size) {
     CSA256(&foursB, &twos, twos, twosA, twosB);
     CSA256(&eightsB, &fours, fours, foursA, foursB);
     CSA256(&sixteens, &eights, eights, eightsA, eightsB);
-
-    total = _mm256_add_epi64(total, popcount(sixteens));
+    local = _mm256_add_epi64(local, popcount(sixteens));
   }
 
+  total = _mm256_sad_epu8(local, zero);
   total = _mm256_slli_epi64(total, 4);  // * 16
   total = _mm256_add_epi64(
-      total, _mm256_slli_epi64(popcount(eights), 3));  // += 8 * ...
+      total, _mm256_slli_epi64(_mm256_sad_epu8(popcount(eights), zero),
+                               3));  // += 8 * ...
   total = _mm256_add_epi64(
-      total, _mm256_slli_epi64(popcount(fours), 2));  // += 4 * ...
-  total = _mm256_add_epi64(total,
-                           _mm256_slli_epi64(popcount(twos), 1));  // += 2 * ...
-  total = _mm256_add_epi64(total, popcount(ones));
+      total, _mm256_slli_epi64(_mm256_sad_epu8(popcount(fours), zero),
+                               2));  // += 4 * ...
+  total = _mm256_add_epi64(
+      total, _mm256_slli_epi64(_mm256_sad_epu8(popcount(twos), zero),
+                               1));  // += 2 * ...
+  total = _mm256_add_epi64(total, _mm256_sad_epu8(popcount(ones), zero));
 
   for (; i < size; i++) total = _mm256_add_epi64(total, popcount(A[i] ^ B[i]));
 
@@ -170,11 +173,17 @@ uint64_t xnor_popcnt_AVX2_harley_seal(const uint8_t* A, const uint8_t* B,
   return total;
 }
 
-__attribute__((noinline)) __m256i xnor_popcnt_AVX2_lookup2x2(const uint8_t* A0,
-                                                             const uint8_t* A1,
-                                                             const uint8_t* B0,
-                                                             const uint8_t* B1,
-                                                             const size_t n) {
+uint64_t xnor_popcnt_AVX2_harley_seal2(const uint8_t* A, const uint8_t* B,
+                                       const size_t size) {
+  assert(size % 32 == 0);
+  uint64_t total =
+      AVX2_harley_seal::popcnt2((const __m256i*)A, (const __m256i*)B, size / 32);
+  return total;
+}
+
+__attribute__((noinline)) void xnor_popcnt_AVX2_lookup2x2(
+    const uint8_t* A0, const uint8_t* A1, const uint8_t* B0, const uint8_t* B1,
+    uint32_t* C, const size_t Cstride, const size_t n) {
   assert(n % 32 == 0);
   size_t i = 0;
   A0 = (const uint8_t*)__builtin_assume_aligned(A0, kDefaultAlignment);
@@ -195,10 +204,10 @@ __attribute__((noinline)) __m256i xnor_popcnt_AVX2_lookup2x2(const uint8_t* A0,
 
   const __m256i low_mask = _mm256_set1_epi8(0x0f);
 
-  __m256i acc00 = _mm256_setzero_si256();
-  __m256i acc01 = _mm256_setzero_si256();
-  __m256i acc10 = _mm256_setzero_si256();
-  __m256i acc11 = _mm256_setzero_si256();
+  __m256i local00 = _mm256_setzero_si256();
+  __m256i local01 = _mm256_setzero_si256();
+  __m256i local10 = _mm256_setzero_si256();
+  __m256i local11 = _mm256_setzero_si256();
 
 #define ITER                                                         \
   {                                                                  \
@@ -246,48 +255,32 @@ __attribute__((noinline)) __m256i xnor_popcnt_AVX2_lookup2x2(const uint8_t* A0,
   }
 
   while (i + 8 * 32 <= n) {
-    __m256i local00 = _mm256_setzero_si256();
-    __m256i local01 = _mm256_setzero_si256();
-    __m256i local10 = _mm256_setzero_si256();
-    __m256i local11 = _mm256_setzero_si256();
     ITER ITER ITER ITER ITER ITER ITER ITER;
-    acc00 = _mm256_add_epi64(acc00,
-                             _mm256_sad_epu8(local00, _mm256_setzero_si256()));
-    acc01 = _mm256_add_epi64(acc01,
-                             _mm256_sad_epu8(local01, _mm256_setzero_si256()));
-    acc10 = _mm256_add_epi64(acc10,
-                             _mm256_sad_epu8(local10, _mm256_setzero_si256()));
-    acc11 = _mm256_add_epi64(acc11,
-                             _mm256_sad_epu8(local11, _mm256_setzero_si256()));
   }
-
-  __m256i local00 = _mm256_setzero_si256();
-  __m256i local01 = _mm256_setzero_si256();
-  __m256i local10 = _mm256_setzero_si256();
-  __m256i local11 = _mm256_setzero_si256();
 
   while (i + 32 <= n) {
     ITER;
   }
-  acc00 =
-      _mm256_add_epi64(acc00, _mm256_sad_epu8(local00, _mm256_setzero_si256()));
-  acc01 =
-      _mm256_add_epi64(acc01, _mm256_sad_epu8(local01, _mm256_setzero_si256()));
-  acc10 =
-      _mm256_add_epi64(acc10, _mm256_sad_epu8(local10, _mm256_setzero_si256()));
-  acc11 =
-      _mm256_add_epi64(acc11, _mm256_sad_epu8(local11, _mm256_setzero_si256()));
+
+  const auto acc00 = _mm256_sad_epu8(local00, _mm256_setzero_si256());
+  const auto acc01 = _mm256_sad_epu8(local01, _mm256_setzero_si256());
+  const auto acc10 = _mm256_sad_epu8(local10, _mm256_setzero_si256());
+  const auto acc11 = _mm256_sad_epu8(local11, _mm256_setzero_si256());
 
 #undef ITER
   // 4x32 each, [:128]
-
-  acc00 = _mm256_hadd_epi32(acc00, acc00);
-  acc01 = _mm256_hadd_epi32(acc01, acc01);
-  acc10 = _mm256_hadd_epi32(acc10, acc10);
-  acc11 = _mm256_hadd_epi32(acc11, acc11);
-  const auto acc0 = _mm256_hadd_epi32(acc00, acc01);
-  const auto acc1 = _mm256_hadd_epi32(acc10, acc11);
-  return _mm256_hadd_epi32(acc0, acc1);
+  auto r = [](__m256i v) -> uint32_t {
+    uint32_t result = 0;
+    result += static_cast<uint32_t>(_mm256_extract_epi64(v, 0));
+    result += static_cast<uint32_t>(_mm256_extract_epi64(v, 1));
+    result += static_cast<uint32_t>(_mm256_extract_epi64(v, 2));
+    result += static_cast<uint32_t>(_mm256_extract_epi64(v, 3));
+    return result;
+  };
+  C[0 * Cstride + 0] = r(acc00);
+  C[0 * Cstride + 1] = r(acc01);
+  C[1 * Cstride + 0] = r(acc10);
+  C[1 * Cstride + 1] = r(acc11);
 }
 
 template <size_t M, size_t N>
@@ -314,12 +307,6 @@ __attribute__((noinline)) void xnor_popcnt_AVX2_lookupMxN(const uint8_t* A,
 
   const __m256i low_mask = _mm256_set1_epi8(0x0f);
 
-  __m256i acc[M][N];
-  for (size_t m = 0; m < M; ++m) {
-    for (size_t n = 0; n < N; ++n) {
-      acc[m][n] = _mm256_setzero_si256();
-    }
-  }
   const __m256i zero = _mm256_setzero_si256();
 
   __m256i Areg[M];
@@ -349,88 +336,81 @@ __attribute__((noinline)) void xnor_popcnt_AVX2_lookupMxN(const uint8_t* A,
   }
 
   __m256i local[M][N];
-
-  while (i + 8 * 32 <= qk) {
-    for (size_t m = 0; m < M; ++m) {
-      for (size_t n = 0; n < N; ++n) {
-        local[m][n] = _mm256_setzero_si256();
-      }
-    }
-    ITER ITER ITER ITER ITER ITER ITER ITER;
-    for (size_t m = 0; m < M; ++m) {
-      for (size_t n = 0; n < N; ++n) {
-        acc[m][n] =
-            _mm256_add_epi64(acc[m][n], _mm256_sad_epu8(local[m][n], zero));
-      }
+  for (size_t m = 0; m < M; ++m) {
+    for (size_t n = 0; n < N; ++n) {
+      local[m][n] = _mm256_setzero_si256();
     }
   }
 
-  if (i != qk) {
-    for (size_t m = 0; m < M; ++m) {
-      for (size_t n = 0; n < N; ++n) {
-        local[m][n] = _mm256_setzero_si256();
-      }
-    }
+  while (i + 8 * 32 <= qk) {
+    ITER ITER ITER ITER ITER ITER ITER;
+  }
 
-    while (i + 32 <= qk) {
-      ITER;
-    }
-    for (size_t m = 0; m < M; ++m) {
-      for (size_t n = 0; n < N; ++n) {
-        acc[m][n] =
-            _mm256_add_epi64(acc[m][n], _mm256_sad_epu8(local[m][n], zero));
-      }
+  while (i + 32 <= qk) {
+    ITER;
+  }
+
+  __m256i acc[M][N];
+  for (size_t m = 0; m < M; ++m) {
+    for (size_t n = 0; n < N; ++n) {
+      acc[m][n] = _mm256_sad_epu8(local[m][n], zero);
     }
   }
 #undef ITER
+
+  auto r = [](__m256i v) -> uint32_t {
+    uint32_t result = 0;
+    result += static_cast<uint32_t>(_mm256_extract_epi64(v, 0));
+    result += static_cast<uint32_t>(_mm256_extract_epi64(v, 1));
+    result += static_cast<uint32_t>(_mm256_extract_epi64(v, 2));
+    result += static_cast<uint32_t>(_mm256_extract_epi64(v, 3));
+    return result;
+  };
+
   for (size_t m = 0; m < M; ++m) {
     // merge vectors
     // if (N % 8 == 0) {
     //   // static_assert(N % 8 == 0, "");
     //   for (size_t n = 0; n < N; n += 8) {
     //     const __m256i n01 = __builtin_shufflevector(
-    //         (__v32qi)acc[m][n + 0], (__v32qi)acc[m][n + 1], 0, 1, 8, 9, 16, 17,
-    //         24, 25, 32, 33, 40, 41, 48, 49, 56, 57, -1, -1, -1, -1, -1, -1, -1,
-    //         -1, -1, -1, -1, -1, -1, -1, -1, -1);
+    //         (__v32qi)acc[m][n + 0], (__v32qi)acc[m][n + 1], 0, 1, 8, 9, 16,
+    //         17, 24, 25, 32, 33, 40, 41, 48, 49, 56, 57, -1, -1, -1, -1, -1,
+    //         -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1);
     //     const __m256i n23 = __builtin_shufflevector(
-    //         (__v32qi)acc[m][n + 2], (__v32qi)acc[m][n + 3], 0, 1, 8, 9, 16, 17,
-    //         24, 25, 32, 33, 40, 41, 48, 49, 56, 57, -1, -1, -1, -1, -1, -1, -1,
-    //         -1, -1, -1, -1, -1, -1, -1, -1, -1);
+    //         (__v32qi)acc[m][n + 2], (__v32qi)acc[m][n + 3], 0, 1, 8, 9, 16,
+    //         17, 24, 25, 32, 33, 40, 41, 48, 49, 56, 57, -1, -1, -1, -1, -1,
+    //         -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1);
     //     const __m256i n45 = __builtin_shufflevector(
-    //         (__v32qi)acc[m][n + 4], (__v32qi)acc[m][n + 5], 0, 1, 8, 9, 16, 17,
-    //         24, 25, 32, 33, 40, 41, 48, 49, 56, 57, -1, -1, -1, -1, -1, -1, -1,
-    //         -1, -1, -1, -1, -1, -1, -1, -1, -1);
+    //         (__v32qi)acc[m][n + 4], (__v32qi)acc[m][n + 5], 0, 1, 8, 9, 16,
+    //         17, 24, 25, 32, 33, 40, 41, 48, 49, 56, 57, -1, -1, -1, -1, -1,
+    //         -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1);
     //     const __m256i n67 = __builtin_shufflevector(
-    //         (__v32qi)acc[m][n + 6], (__v32qi)acc[m][n + 7], 0, 1, 8, 9, 16, 17,
-    //         24, 25, 32, 33, 40, 41, 48, 49, 56, 57, -1, -1, -1, -1, -1, -1, -1,
-    //         -1, -1, -1, -1, -1, -1, -1, -1, -1);
+    //         (__v32qi)acc[m][n + 6], (__v32qi)acc[m][n + 7], 0, 1, 8, 9, 16,
+    //         17, 24, 25, 32, 33, 40, 41, 48, 49, 56, 57, -1, -1, -1, -1, -1,
+    //         -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1);
     //     const __m256i n0123 = __builtin_shufflevector(
     //         (__v32qi)n01, (__v32qi)n23, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11,
-    //         12, 13, 14, 15, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44,
-    //         45, 46, 47);
+    //         12, 13, 14, 15, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43,
+    //         44, 45, 46, 47);
     //     const __m256i n4567 = __builtin_shufflevector(
     //         (__v32qi)n45, (__v32qi)n67, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11,
-    //         12, 13, 14, 15, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44,
-    //         45, 46, 47);
+    //         12, 13, 14, 15, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43,
+    //         44, 45, 46, 47);
     //     const __m256i n0011223344556677 = _mm256_hadd_epi16(n0123, n4567);
     //     const __m256i n0123456700000000 =
     //         _mm256_hadd_epi16(n0011223344556677, zero);
     //     const __m128i n01234567 = __builtin_shufflevector(
-    //         (__v16hi)n0123456700000000, (__v16hi)n0123456700000000, 0, 1, 2, 3,
-    //         4, 5, 6, 7);
+    //         (__v16hi)n0123456700000000, (__v16hi)n0123456700000000, 0, 1, 2,
+    //         3, 4, 5, 6, 7);
     //     const __m256i n01234567v = _mm256_cvtepi16_epi32(n01234567);
     //     _mm256_store_si256((__m256i*)(C + Cstride * m + n), n01234567v);
     //     // acc[m][n]
     //   }
     // } else {
-      for (size_t n = 0; n < N; ++n) {
-        C[Cstride * m + n] =
-            static_cast<uint32_t>(_mm256_extract_epi64(acc[m][n], 0)) +
-            static_cast<uint32_t>(_mm256_extract_epi64(acc[m][n], 1)) +
-            static_cast<uint32_t>(_mm256_extract_epi64(acc[m][n], 2)) +
-            static_cast<uint32_t>(_mm256_extract_epi64(acc[m][n], 3));
-      }
-  // }
+    for (size_t n = 0; n < N; ++n) {
+      C[Cstride * m + n] = r(acc[m][n]);
+    }
+    // }
   }
   return;
 }
@@ -593,22 +573,39 @@ __attribute__((noinline)) void qxnor_popcnt_hs(const uint8_t* A,
   }
 }
 
+template <size_t M, size_t N, size_t MM, size_t NN>
+__attribute__((noinline)) void qxnor_popcnt_mxn(const uint8_t* A,
+                                                const uint8_t* B, uint32_t* C,
+                                                size_t Cstride, size_t QK) {
+  for (size_t m = 0; m < M; m += MM) {
+    for (size_t n = 0; n < N; n += NN) {
+      xnor_popcnt_AVX2_lookupMxN<MM, NN>(&A[m * QK], &B[n * QK],
+                                         &C[m * Cstride + n], Cstride, QK);
+    }
+  }
+}
+
+template <size_t M, size_t N>
+__attribute__((noinline)) void qxnor_popcnt_hs2(const uint8_t* A,
+                                                const uint8_t* B, uint32_t* C,
+                                                size_t Cstride, size_t QK) {
+  for (size_t m = 0; m < M; ++m) {
+    for (size_t n = 0; n < N; ++n) {
+      size_t acc = 0;
+      acc += xnor_popcnt_AVX2_harley_seal2(&A[m * QK], &B[n * QK], QK);
+      C[m * Cstride + n] = acc;
+    }
+  }
+}
+
 template <size_t M, size_t N>
 __attribute__((noinline)) void qxnor_popcnt2x2(const uint8_t* A,
                                                const uint8_t* B, uint32_t* C,
                                                size_t Cstride, size_t QK) {
   for (size_t m = 0; m < M; m += 2) {
     for (size_t n = 0; n < N; n += 2) {
-      const auto acc = xnor_popcnt_AVX2_lookup2x2(
-          &A[m * QK], &A[(m + 1) * QK], &B[n * QK], &B[(n + 1) * QK], QK);
-      C[(m + 0) * Cstride + (n + 0)] =
-          static_cast<uint32_t>(_mm256_extract_epi64(acc, 0));
-      C[(m + 0) * Cstride + (n + 1)] =
-          static_cast<uint32_t>(_mm256_extract_epi64(acc, 1));
-      C[(m + 1) * Cstride + (n + 0)] =
-          static_cast<uint32_t>(_mm256_extract_epi64(acc, 2));
-      C[(m + 1) * Cstride + (n + 1)] =
-          static_cast<uint32_t>(_mm256_extract_epi64(acc, 3));
+      xnor_popcnt_AVX2_lookup2x2(&A[m * QK], &A[(m + 1) * QK], &B[n * QK],
+                                 &B[(n + 1) * QK], &C[m * Cstride + n], N, QK);
     }
   }
 }
@@ -766,6 +763,23 @@ static void BM_qxnor_popcnt_hs(benchmark::State& state) {
 }
 
 template <size_t M, size_t N>
+static void BM_qxnor_popcnt_hs2(benchmark::State& state) {
+  size_t QK = state.range(0);
+  std::vector<uint8_t, AlignedAllocator<uint8_t>> A(M * QK);
+  std::vector<uint8_t, AlignedAllocator<uint8_t>> B(N * QK);
+  std::vector<uint32_t> C(M * N);
+
+  size_t iters = 0;
+  while (state.KeepRunning()) {
+    qxnor_popcnt_hs2<M, N>(A.data(), B.data(), C.data(), N, QK);
+    ++iters;
+  }
+
+  state.counters["FLOPS"] = benchmark::Counter(2 * M * N * QK * 8 * iters,
+                                               benchmark::Counter::kIsRate);
+}
+
+template <size_t M, size_t N, size_t MM, size_t NN>
 static void BM_qxnor_popcnt_mxn(benchmark::State& state) {
   size_t QK = state.range(0);
   std::vector<uint8_t, AlignedAllocator<uint8_t>> A(M * QK);
@@ -774,7 +788,7 @@ static void BM_qxnor_popcnt_mxn(benchmark::State& state) {
 
   size_t iters = 0;
   while (state.KeepRunning()) {
-    xnor_popcnt_AVX2_lookupMxN<M, N>(A.data(), B.data(), C.data(), N, QK);
+    qxnor_popcnt_mxn<M, N, MM, NN>(A.data(), B.data(), C.data(), N, QK);
     ++iters;
   }
 
@@ -809,8 +823,8 @@ static void BM_yuxin_conv(benchmark::State& state) {
   while (state.KeepRunning()) {
     const size_t ops = conv(W, X, Y);
     // if (ops != 2 * M * N * QK * 8) {
-    //   std::cerr << "Ops: " << ops << ", expected: " << 2 * M * N * QK * 8 << std::endl;
-    //   throw std::runtime_error("Mismatch");
+    //   std::cerr << "Ops: " << ops << ", expected: " << 2 * M * N * QK * 8 <<
+    //   std::endl; throw std::runtime_error("Mismatch");
     // }
     ++iters;
   }
@@ -831,14 +845,14 @@ static void BM_yuxin_conv3x3(benchmark::State& state) {
   while (state.KeepRunning()) {
     const size_t ops = conv(W, X, Y);
     // if (ops != 2 * M * M * N * QK * 8 * 3 * 3) {
-    //   std::cerr << "Ops: " << ops << ", expected: " << 2 * M * M * N * QK * 8 * 3 * 3 <<
-    //   std::endl; throw std::runtime_error("Mismatch");
+    //   std::cerr << "Ops: " << ops << ", expected: " << 2 * M * M * N * QK * 8
+    //   * 3 * 3 << std::endl; throw std::runtime_error("Mismatch");
     // }
     ++iters;
   }
 
-  state.counters["FLOPS"] = benchmark::Counter(2 * M * M * N * QK * 8 * 3 * 3 * iters,
-                                               benchmark::Counter::kIsRate);
+  state.counters["FLOPS"] = benchmark::Counter(
+      2 * M * M * N * QK * 8 * 3 * 3 * iters, benchmark::Counter::kIsRate);
 }
 
 template <size_t M, size_t N>
@@ -860,26 +874,26 @@ static void BM_sgemm(benchmark::State& state) {
 }
 
 constexpr size_t kQKLowerBound = 64;
-constexpr size_t kQKUpperBound = 2048;
+constexpr size_t kQKUpperBound = 4096;
 
-// BENCHMARK_TEMPLATE2(BM_qxnor_popcnt, 2, 2)
-//     ->RangeMultiplier(2)
-//     ->Range(kQKLowerBound, kQKUpperBound);
-// BENCHMARK_TEMPLATE2(BM_qxnor_popcnt, 4, 4)
-//     ->RangeMultiplier(2)
-//     ->Range(kQKLowerBound, kQKUpperBound);
-// BENCHMARK_TEMPLATE2(BM_qxnor_popcnt, 8, 8)
-//     ->RangeMultiplier(2)
-//     ->Range(kQKLowerBound, kQKUpperBound);
-// BENCHMARK_TEMPLATE2(BM_qxnor_popcnt, 16, 16)
-//     ->RangeMultiplier(2)
-//     ->Range(kQKLowerBound, kQKUpperBound);
-// BENCHMARK_TEMPLATE2(BM_qxnor_popcnt, 32, 32)
-//     ->RangeMultiplier(2)
-//     ->Range(kQKLowerBound, kQKUpperBound);
-// BENCHMARK_TEMPLATE2(BM_qxnor_popcnt, 64, 64)
-//     ->RangeMultiplier(2)
-//     ->Range(kQKLowerBound, kQKUpperBound);
+BENCHMARK_TEMPLATE2(BM_qxnor_popcnt, 2, 2)
+    ->RangeMultiplier(2)
+    ->Range(kQKLowerBound, kQKUpperBound);
+BENCHMARK_TEMPLATE2(BM_qxnor_popcnt, 4, 4)
+    ->RangeMultiplier(2)
+    ->Range(kQKLowerBound, kQKUpperBound);
+BENCHMARK_TEMPLATE2(BM_qxnor_popcnt, 8, 8)
+    ->RangeMultiplier(2)
+    ->Range(kQKLowerBound, kQKUpperBound);
+BENCHMARK_TEMPLATE2(BM_qxnor_popcnt, 16, 16)
+    ->RangeMultiplier(2)
+    ->Range(kQKLowerBound, kQKUpperBound);
+BENCHMARK_TEMPLATE2(BM_qxnor_popcnt, 32, 32)
+    ->RangeMultiplier(2)
+    ->Range(kQKLowerBound, kQKUpperBound);
+BENCHMARK_TEMPLATE2(BM_qxnor_popcnt, 64, 64)
+    ->RangeMultiplier(2)
+    ->Range(kQKLowerBound, kQKUpperBound);
 
 BENCHMARK_TEMPLATE2(BM_qxnor_popcnt_hs, 2, 2)
     ->RangeMultiplier(2)
@@ -897,6 +911,25 @@ BENCHMARK_TEMPLATE2(BM_qxnor_popcnt_hs, 32, 32)
     ->RangeMultiplier(2)
     ->Range(kQKLowerBound, kQKUpperBound);
 BENCHMARK_TEMPLATE2(BM_qxnor_popcnt_hs, 64, 64)
+    ->RangeMultiplier(2)
+    ->Range(kQKLowerBound, kQKUpperBound);
+
+BENCHMARK_TEMPLATE2(BM_qxnor_popcnt_hs2, 2, 2)
+    ->RangeMultiplier(2)
+    ->Range(kQKLowerBound, kQKUpperBound);
+BENCHMARK_TEMPLATE2(BM_qxnor_popcnt_hs2, 4, 4)
+    ->RangeMultiplier(2)
+    ->Range(kQKLowerBound, kQKUpperBound);
+BENCHMARK_TEMPLATE2(BM_qxnor_popcnt_hs2, 8, 8)
+    ->RangeMultiplier(2)
+    ->Range(kQKLowerBound, kQKUpperBound);
+BENCHMARK_TEMPLATE2(BM_qxnor_popcnt_hs2, 16, 16)
+    ->RangeMultiplier(2)
+    ->Range(kQKLowerBound, kQKUpperBound);
+BENCHMARK_TEMPLATE2(BM_qxnor_popcnt_hs2, 32, 32)
+    ->RangeMultiplier(2)
+    ->Range(kQKLowerBound, kQKUpperBound);
+BENCHMARK_TEMPLATE2(BM_qxnor_popcnt_hs2, 64, 64)
     ->RangeMultiplier(2)
     ->Range(kQKLowerBound, kQKUpperBound);
 
@@ -919,35 +952,76 @@ BENCHMARK_TEMPLATE2(BM_qxnor_popcnt2x2, 64, 64)
     ->RangeMultiplier(2)
     ->Range(kQKLowerBound, kQKUpperBound);
 
-BENCHMARK_TEMPLATE2(BM_qxnor_popcnt_mxn, 1, 2)
+#define BENCHMARK_TEMPLATE4(n, a, b, c, d)               \
+  BENCHMARK_PRIVATE_DECLARE(n) =                         \
+      (::benchmark::internal::RegisterBenchmarkInternal( \
+          new ::benchmark::internal::FunctionBenchmark(  \
+              #n "<" #a "," #b "," #c "," #d ">", n<a, b, c, d>)))
+
+BENCHMARK_TEMPLATE4(BM_qxnor_popcnt_mxn, 2, 2, 2, 2)
     ->RangeMultiplier(2)
     ->Range(kQKLowerBound, kQKUpperBound);
-BENCHMARK_TEMPLATE2(BM_qxnor_popcnt_mxn, 2, 2)
+BENCHMARK_TEMPLATE4(BM_qxnor_popcnt_mxn, 4, 4, 2, 2)
     ->RangeMultiplier(2)
     ->Range(kQKLowerBound, kQKUpperBound);
-BENCHMARK_TEMPLATE2(BM_qxnor_popcnt_mxn, 1, 3)
-->RangeMultiplier(2)
-->Range(kQKLowerBound, kQKUpperBound);
-BENCHMARK_TEMPLATE2(BM_qxnor_popcnt_mxn, 2, 3)
+BENCHMARK_TEMPLATE4(BM_qxnor_popcnt_mxn, 8, 8, 2, 2)
     ->RangeMultiplier(2)
     ->Range(kQKLowerBound, kQKUpperBound);
-BENCHMARK_TEMPLATE2(BM_qxnor_popcnt_mxn, 3, 3)
+BENCHMARK_TEMPLATE4(BM_qxnor_popcnt_mxn, 16, 16, 2, 2)
     ->RangeMultiplier(2)
     ->Range(kQKLowerBound, kQKUpperBound);
-BENCHMARK_TEMPLATE2(BM_qxnor_popcnt_mxn, 3, 4)
+BENCHMARK_TEMPLATE4(BM_qxnor_popcnt_mxn, 32, 32, 2, 2)
     ->RangeMultiplier(2)
     ->Range(kQKLowerBound, kQKUpperBound);
-BENCHMARK_TEMPLATE2(BM_qxnor_popcnt_mxn, 4, 4)
+BENCHMARK_TEMPLATE4(BM_qxnor_popcnt_mxn, 64, 64, 2, 2)
     ->RangeMultiplier(2)
     ->Range(kQKLowerBound, kQKUpperBound);
 
-BENCHMARK_TEMPLATE2(BM_qxnor_popcnt_mxn, 8, 8)
+BENCHMARK_TEMPLATE4(BM_qxnor_popcnt_mxn, 4, 4, 4, 4)
     ->RangeMultiplier(2)
     ->Range(kQKLowerBound, kQKUpperBound);
-BENCHMARK_TEMPLATE2(BM_qxnor_popcnt_mxn, 16, 16)
+BENCHMARK_TEMPLATE4(BM_qxnor_popcnt_mxn, 8, 8, 4, 4)
     ->RangeMultiplier(2)
     ->Range(kQKLowerBound, kQKUpperBound);
-BENCHMARK_TEMPLATE2(BM_qxnor_popcnt_mxn, 64, 64)
+BENCHMARK_TEMPLATE4(BM_qxnor_popcnt_mxn, 16, 16, 4, 4)
+    ->RangeMultiplier(2)
+    ->Range(kQKLowerBound, kQKUpperBound);
+BENCHMARK_TEMPLATE4(BM_qxnor_popcnt_mxn, 32, 32, 4, 4)
+    ->RangeMultiplier(2)
+    ->Range(kQKLowerBound, kQKUpperBound);
+BENCHMARK_TEMPLATE4(BM_qxnor_popcnt_mxn, 64, 64, 4, 4)
+    ->RangeMultiplier(2)
+    ->Range(kQKLowerBound, kQKUpperBound);
+
+BENCHMARK_TEMPLATE4(BM_qxnor_popcnt_mxn, 3, 4, 3, 4)
+    ->RangeMultiplier(2)
+    ->Range(kQKLowerBound, kQKUpperBound);
+BENCHMARK_TEMPLATE4(BM_qxnor_popcnt_mxn, 9, 8, 3, 4)
+    ->RangeMultiplier(2)
+    ->Range(kQKLowerBound, kQKUpperBound);
+BENCHMARK_TEMPLATE4(BM_qxnor_popcnt_mxn, 15, 16, 3, 4)
+    ->RangeMultiplier(2)
+    ->Range(kQKLowerBound, kQKUpperBound);
+BENCHMARK_TEMPLATE4(BM_qxnor_popcnt_mxn, 33, 32, 3, 4)
+    ->RangeMultiplier(2)
+    ->Range(kQKLowerBound, kQKUpperBound);
+BENCHMARK_TEMPLATE4(BM_qxnor_popcnt_mxn, 66, 64, 3, 4)
+    ->RangeMultiplier(2)
+    ->Range(kQKLowerBound, kQKUpperBound);
+
+BENCHMARK_TEMPLATE4(BM_qxnor_popcnt_mxn, 2, 3, 2, 3)
+    ->RangeMultiplier(2)
+    ->Range(kQKLowerBound, kQKUpperBound);
+BENCHMARK_TEMPLATE4(BM_qxnor_popcnt_mxn, 8, 9, 2, 3)
+    ->RangeMultiplier(2)
+    ->Range(kQKLowerBound, kQKUpperBound);
+BENCHMARK_TEMPLATE4(BM_qxnor_popcnt_mxn, 16, 15, 2, 3)
+    ->RangeMultiplier(2)
+    ->Range(kQKLowerBound, kQKUpperBound);
+BENCHMARK_TEMPLATE4(BM_qxnor_popcnt_mxn, 32, 33, 2, 3)
+    ->RangeMultiplier(2)
+    ->Range(kQKLowerBound, kQKUpperBound);
+BENCHMARK_TEMPLATE4(BM_qxnor_popcnt_mxn, 64, 66, 2, 3)
     ->RangeMultiplier(2)
     ->Range(kQKLowerBound, kQKUpperBound);
 
