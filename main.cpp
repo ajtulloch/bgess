@@ -290,126 +290,150 @@ __attribute__((noinline)) __m256i xnor_popcnt_AVX2_lookup2x2(const uint8_t* A0,
   return _mm256_hadd_epi32(acc0, acc1);
 }
 
-// template <size_t M, size_t N>
-// __attribute__((noinline)) __m256i xnor_popcnt_AVX2_lookupMxN(const uint8_t* A,
-//                                                              const uint8_t* B,
-//                                                              const uint32_t* C,
-//                                                              const size_t qk) {
-//   assert(qk % 32 == 0);
-//   size_t i = 0;
+template <size_t M, size_t N>
+__attribute__((noinline)) void xnor_popcnt_AVX2_lookupMxN(const uint8_t* A,
+                                                          const uint8_t* B,
+                                                          uint32_t* C,
+                                                          const size_t Cstride,
+                                                          const size_t qk) {
+  A = (const uint8_t*)__builtin_assume_aligned(A, kDefaultAlignment);
+  B = (const uint8_t*)__builtin_assume_aligned(B, kDefaultAlignment);
+  assert(qk % 32 == 0);
+  size_t i = 0;
 
-//   const __m256i lookup = _mm256_setr_epi8(
-//       /* 0 */ 0, /* 1 */ 1, /* 2 */ 1, /* 3 */ 2,
-//       /* 4 */ 1, /* 5 */ 2, /* 6 */ 2, /* 7 */ 3,
-//       /* 8 */ 1, /* 9 */ 2, /* a */ 2, /* b */ 3,
-//       /* c */ 2, /* d */ 3, /* e */ 3, /* f */ 4,
+  const __m256i lookup = _mm256_setr_epi8(
+      /* 0 */ 0, /* 1 */ 1, /* 2 */ 1, /* 3 */ 2,
+      /* 4 */ 1, /* 5 */ 2, /* 6 */ 2, /* 7 */ 3,
+      /* 8 */ 1, /* 9 */ 2, /* a */ 2, /* b */ 3,
+      /* c */ 2, /* d */ 3, /* e */ 3, /* f */ 4,
 
-//       /* 0 */ 0, /* 1 */ 1, /* 2 */ 1, /* 3 */ 2,
-//       /* 4 */ 1, /* 5 */ 2, /* 6 */ 2, /* 7 */ 3,
-//       /* 8 */ 1, /* 9 */ 2, /* a */ 2, /* b */ 3,
-//       /* c */ 2, /* d */ 3, /* e */ 3, /* f */ 4);
+      /* 0 */ 0, /* 1 */ 1, /* 2 */ 1, /* 3 */ 2,
+      /* 4 */ 1, /* 5 */ 2, /* 6 */ 2, /* 7 */ 3,
+      /* 8 */ 1, /* 9 */ 2, /* a */ 2, /* b */ 3,
+      /* c */ 2, /* d */ 3, /* e */ 3, /* f */ 4);
 
-//   const __m256i low_mask = _mm256_set1_epi8(0x0f);
+  const __m256i low_mask = _mm256_set1_epi8(0x0f);
 
-//   __m256i acc0 = _mm256_setzero_si256();
+  __m256i acc[M][N];
+  for (size_t m = 0; m < M; ++m) {
+    for (size_t n = 0; n < N; ++n) {
+      acc[m][n] = _mm256_setzero_si256();
+    }
+  }
+  const __m256i zero = _mm256_setzero_si256();
 
-//   //   while (i + 8 * 32 <= n) {
-//   //     __m256i local00 = _mm256_setzero_si256();
-//   //     __m256i local01 = _mm256_setzero_si256();
-//   //     __m256i local10 = _mm256_setzero_si256();
-//   //     __m256i local11 = _mm256_setzero_si256();
-//   //     ITER ITER ITER ITER ITER ITER ITER ITER;
-//   //     acc00 = _mm256_add_epi64(acc00,
-//   //                              _mm256_sad_epu8(local00,
-//   //                              _mm256_setzero_si256()));
-//   //     acc01 = _mm256_add_epi64(acc01,
-//   //                              _mm256_sad_epu8(local01,
-//   //                              _mm256_setzero_si256()));
-//   //     acc10 = _mm256_add_epi64(acc10,
-//   //                              _mm256_sad_epu8(local10,
-//   //                              _mm256_setzero_si256()));
-//   //     acc11 = _mm256_add_epi64(acc11,
-//   //                              _mm256_sad_epu8(local11,
-//   //                              _mm256_setzero_si256()));
-//   //   }
+  __m256i Areg[M];
 
-//   __m256i local00 = _mm256_setzero_si256();
-//   __m256i local01 = _mm256_setzero_si256();
-//   __m256i local10 = _mm256_setzero_si256();
-//   __m256i local11 = _mm256_setzero_si256();
+#define ITER                                                             \
+  {                                                                      \
+    for (size_t m = 0; m < M; ++m) {                                     \
+      Areg[m] = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(A)); \
+      A += 32;                                                           \
+    }                                                                    \
+    for (size_t n = 0; n < N; ++n) {                                     \
+      const auto Breg =                                                  \
+          _mm256_loadu_si256(reinterpret_cast<const __m256i*>(B));       \
+      B += 32;                                                           \
+      for (size_t m = 0; m < M; ++m) {                                   \
+        const __m256i vec = _mm256_xor_si256(Areg[m], Breg);             \
+        const __m256i lo = _mm256_and_si256(vec, low_mask);              \
+        const __m256i hi =                                               \
+            _mm256_and_si256(_mm256_srli_epi16(vec, 4), low_mask);       \
+        const __m256i popcnt1 = _mm256_shuffle_epi8(lookup, lo);         \
+        const __m256i popcnt2 = _mm256_shuffle_epi8(lookup, hi);         \
+        local[m][n] = _mm256_add_epi8(local[m][n], popcnt1);             \
+        local[m][n] = _mm256_add_epi8(local[m][n], popcnt2);             \
+      }                                                                  \
+    }                                                                    \
+    i += 32;                                                             \
+  }
 
-//   while (i + 32 <= qk) {
-//     __m256i Avec[M];
-//     __m256i Bvec[N];
-//     for (size_t m = 0; m < M; ++m) {
-//       Avec[m] =
-//           _mm256_load_si256(reinterpret_cast<const __m256i *>(A + qk * m +
-//           i));
-//     }
-//     for (size_t n = 0; n < N; ++n) {
-//       Bvec[n] =
-//           _mm256_load_si256(reinterpret_cast<const __m256i *>(B + qk * n +
-//           i));
-//     }
-//     for (size_t m = 0; m < M; ++m) {
-//     }
-//     const __m256i vec00 = _mm256_xor_si256(A0vec, B0vec);
-//     const __m256i vec01 = _mm256_xor_si256(A0vec, B1vec);
-//     const __m256i vec10 = _mm256_xor_si256(A1vec, B0vec);
-//     const __m256i vec11 = _mm256_xor_si256(A1vec, B1vec);
-//     const __m256i lo00 = _mm256_and_si256(vec00, low_mask);
-//     const __m256i lo01 = _mm256_and_si256(vec01, low_mask);
-//     const __m256i lo10 = _mm256_and_si256(vec10, low_mask);
-//     const __m256i lo11 = _mm256_and_si256(vec11, low_mask);
-//     const __m256i hi00 =
-//         _mm256_and_si256(_mm256_srli_epi16(vec00, 4), low_mask);
-//     const __m256i hi01 =
-//         _mm256_and_si256(_mm256_srli_epi16(vec01, 4), low_mask);
-//     const __m256i hi10 =
-//         _mm256_and_si256(_mm256_srli_epi16(vec10, 4), low_mask);
-//     const __m256i hi11 =
-//         _mm256_and_si256(_mm256_srli_epi16(vec11, 4), low_mask);
-//     const __m256i popcntl00 = _mm256_shuffle_epi8(lookup, lo00);
-//     const __m256i popcntl01 = _mm256_shuffle_epi8(lookup, lo01);
-//     const __m256i popcntl10 = _mm256_shuffle_epi8(lookup, lo10);
-//     const __m256i popcntl11 = _mm256_shuffle_epi8(lookup, lo11);
-//     const __m256i popcnth00 = _mm256_shuffle_epi8(lookup, hi00);
-//     const __m256i popcnth01 = _mm256_shuffle_epi8(lookup, hi01);
-//     const __m256i popcnth10 = _mm256_shuffle_epi8(lookup, hi10);
-//     const __m256i popcnth11 = _mm256_shuffle_epi8(lookup, hi11);
-//     local00 = _mm256_add_epi8(local00, popcntl00);
-//     local00 = _mm256_add_epi8(local00, popcnth00);
-//     local01 = _mm256_add_epi8(local01, popcntl01);
-//     local01 = _mm256_add_epi8(local01, popcnth01);
-//     local10 = _mm256_add_epi8(local10, popcntl10);
-//     local10 = _mm256_add_epi8(local10, popcnth10);
-//     local11 = _mm256_add_epi8(local11, popcntl11);
-//     local11 = _mm256_add_epi8(local11, popcnth11);
-//     i += 32;
-//   }
-// }
+  __m256i local[M][N];
 
-// acc00 =
-//     _mm256_add_epi64(acc00, _mm256_sad_epu8(local00,
-//     _mm256_setzero_si256()));
-// acc01 =
-//     _mm256_add_epi64(acc01, _mm256_sad_epu8(local01,
-//     _mm256_setzero_si256()));
-// acc10 =
-//     _mm256_add_epi64(acc10, _mm256_sad_epu8(local10,
-//     _mm256_setzero_si256()));
-// acc11 =
-//     _mm256_add_epi64(acc11, _mm256_sad_epu8(local11,
-//     _mm256_setzero_si256()));
+  while (i + 8 * 32 <= qk) {
+    for (size_t m = 0; m < M; ++m) {
+      for (size_t n = 0; n < N; ++n) {
+        local[m][n] = _mm256_setzero_si256();
+      }
+    }
+    ITER ITER ITER ITER ITER ITER ITER ITER;
+    for (size_t m = 0; m < M; ++m) {
+      for (size_t n = 0; n < N; ++n) {
+        acc[m][n] =
+            _mm256_add_epi64(acc[m][n], _mm256_sad_epu8(local[m][n], zero));
+      }
+    }
+  }
 
-// acc00 = _mm256_hadd_epi32(acc00, acc00);
-// acc01 = _mm256_hadd_epi32(acc01, acc01);
-// acc10 = _mm256_hadd_epi32(acc10, acc10);
-// acc11 = _mm256_hadd_epi32(acc11, acc11);
-// const auto acc0 = _mm256_hadd_epi32(acc00, acc01);
-// const auto acc1 = _mm256_hadd_epi32(acc10, acc11);
-// return _mm256_hadd_epi32(acc0, acc1);
-// }
+  if (i != qk) {
+    for (size_t m = 0; m < M; ++m) {
+      for (size_t n = 0; n < N; ++n) {
+        local[m][n] = _mm256_setzero_si256();
+      }
+    }
+
+    while (i + 32 <= qk) {
+      ITER;
+    }
+    for (size_t m = 0; m < M; ++m) {
+      for (size_t n = 0; n < N; ++n) {
+        acc[m][n] =
+            _mm256_add_epi64(acc[m][n], _mm256_sad_epu8(local[m][n], zero));
+      }
+    }
+  }
+#undef ITER
+  for (size_t m = 0; m < M; ++m) {
+    // merge vectors
+    // if (N % 8 == 0) {
+    //   // static_assert(N % 8 == 0, "");
+    //   for (size_t n = 0; n < N; n += 8) {
+    //     const __m256i n01 = __builtin_shufflevector(
+    //         (__v32qi)acc[m][n + 0], (__v32qi)acc[m][n + 1], 0, 1, 8, 9, 16, 17,
+    //         24, 25, 32, 33, 40, 41, 48, 49, 56, 57, -1, -1, -1, -1, -1, -1, -1,
+    //         -1, -1, -1, -1, -1, -1, -1, -1, -1);
+    //     const __m256i n23 = __builtin_shufflevector(
+    //         (__v32qi)acc[m][n + 2], (__v32qi)acc[m][n + 3], 0, 1, 8, 9, 16, 17,
+    //         24, 25, 32, 33, 40, 41, 48, 49, 56, 57, -1, -1, -1, -1, -1, -1, -1,
+    //         -1, -1, -1, -1, -1, -1, -1, -1, -1);
+    //     const __m256i n45 = __builtin_shufflevector(
+    //         (__v32qi)acc[m][n + 4], (__v32qi)acc[m][n + 5], 0, 1, 8, 9, 16, 17,
+    //         24, 25, 32, 33, 40, 41, 48, 49, 56, 57, -1, -1, -1, -1, -1, -1, -1,
+    //         -1, -1, -1, -1, -1, -1, -1, -1, -1);
+    //     const __m256i n67 = __builtin_shufflevector(
+    //         (__v32qi)acc[m][n + 6], (__v32qi)acc[m][n + 7], 0, 1, 8, 9, 16, 17,
+    //         24, 25, 32, 33, 40, 41, 48, 49, 56, 57, -1, -1, -1, -1, -1, -1, -1,
+    //         -1, -1, -1, -1, -1, -1, -1, -1, -1);
+    //     const __m256i n0123 = __builtin_shufflevector(
+    //         (__v32qi)n01, (__v32qi)n23, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11,
+    //         12, 13, 14, 15, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44,
+    //         45, 46, 47);
+    //     const __m256i n4567 = __builtin_shufflevector(
+    //         (__v32qi)n45, (__v32qi)n67, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11,
+    //         12, 13, 14, 15, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44,
+    //         45, 46, 47);
+    //     const __m256i n0011223344556677 = _mm256_hadd_epi16(n0123, n4567);
+    //     const __m256i n0123456700000000 =
+    //         _mm256_hadd_epi16(n0011223344556677, zero);
+    //     const __m128i n01234567 = __builtin_shufflevector(
+    //         (__v16hi)n0123456700000000, (__v16hi)n0123456700000000, 0, 1, 2, 3,
+    //         4, 5, 6, 7);
+    //     const __m256i n01234567v = _mm256_cvtepi16_epi32(n01234567);
+    //     _mm256_store_si256((__m256i*)(C + Cstride * m + n), n01234567v);
+    //     // acc[m][n]
+    //   }
+    // } else {
+      for (size_t n = 0; n < N; ++n) {
+        C[Cstride * m + n] =
+            static_cast<uint32_t>(_mm256_extract_epi64(acc[m][n], 0)) +
+            static_cast<uint32_t>(_mm256_extract_epi64(acc[m][n], 1)) +
+            static_cast<uint32_t>(_mm256_extract_epi64(acc[m][n], 2)) +
+            static_cast<uint32_t>(_mm256_extract_epi64(acc[m][n], 3));
+      }
+  // }
+  }
+  return;
+}
 
 std::uint64_t xnor_popcnt_AVX2_lookup(const uint8_t* A, const uint8_t* B,
                                       const size_t n) {
@@ -742,6 +766,23 @@ static void BM_qxnor_popcnt_hs(benchmark::State& state) {
 }
 
 template <size_t M, size_t N>
+static void BM_qxnor_popcnt_mxn(benchmark::State& state) {
+  size_t QK = state.range(0);
+  std::vector<uint8_t, AlignedAllocator<uint8_t>> A(M * QK);
+  std::vector<uint8_t, AlignedAllocator<uint8_t>> B(N * QK);
+  std::vector<uint32_t> C(M * N);
+
+  size_t iters = 0;
+  while (state.KeepRunning()) {
+    xnor_popcnt_AVX2_lookupMxN<M, N>(A.data(), B.data(), C.data(), N, QK);
+    ++iters;
+  }
+
+  state.counters["FLOPS"] = benchmark::Counter(2 * M * N * QK * 8 * iters,
+                                               benchmark::Counter::kIsRate);
+}
+
+template <size_t M, size_t N>
 static void BM_qgess_blocked(benchmark::State& state) {
   size_t QK = state.range(0);
   std::vector<uint8_t, AlignedAllocator<uint8_t>> A(M * QK);
@@ -819,26 +860,26 @@ static void BM_sgemm(benchmark::State& state) {
 }
 
 constexpr size_t kQKLowerBound = 64;
-constexpr size_t kQKUpperBound = 512;
+constexpr size_t kQKUpperBound = 2048;
 
-BENCHMARK_TEMPLATE2(BM_qxnor_popcnt, 2, 2)
-    ->RangeMultiplier(2)
-    ->Range(kQKLowerBound, kQKUpperBound);
-BENCHMARK_TEMPLATE2(BM_qxnor_popcnt, 4, 4)
-    ->RangeMultiplier(2)
-    ->Range(kQKLowerBound, kQKUpperBound);
-BENCHMARK_TEMPLATE2(BM_qxnor_popcnt, 8, 8)
-    ->RangeMultiplier(2)
-    ->Range(kQKLowerBound, kQKUpperBound);
-BENCHMARK_TEMPLATE2(BM_qxnor_popcnt, 16, 16)
-    ->RangeMultiplier(2)
-    ->Range(kQKLowerBound, kQKUpperBound);
-BENCHMARK_TEMPLATE2(BM_qxnor_popcnt, 32, 32)
-    ->RangeMultiplier(2)
-    ->Range(kQKLowerBound, kQKUpperBound);
-BENCHMARK_TEMPLATE2(BM_qxnor_popcnt, 64, 64)
-    ->RangeMultiplier(2)
-    ->Range(kQKLowerBound, kQKUpperBound);
+// BENCHMARK_TEMPLATE2(BM_qxnor_popcnt, 2, 2)
+//     ->RangeMultiplier(2)
+//     ->Range(kQKLowerBound, kQKUpperBound);
+// BENCHMARK_TEMPLATE2(BM_qxnor_popcnt, 4, 4)
+//     ->RangeMultiplier(2)
+//     ->Range(kQKLowerBound, kQKUpperBound);
+// BENCHMARK_TEMPLATE2(BM_qxnor_popcnt, 8, 8)
+//     ->RangeMultiplier(2)
+//     ->Range(kQKLowerBound, kQKUpperBound);
+// BENCHMARK_TEMPLATE2(BM_qxnor_popcnt, 16, 16)
+//     ->RangeMultiplier(2)
+//     ->Range(kQKLowerBound, kQKUpperBound);
+// BENCHMARK_TEMPLATE2(BM_qxnor_popcnt, 32, 32)
+//     ->RangeMultiplier(2)
+//     ->Range(kQKLowerBound, kQKUpperBound);
+// BENCHMARK_TEMPLATE2(BM_qxnor_popcnt, 64, 64)
+//     ->RangeMultiplier(2)
+//     ->Range(kQKLowerBound, kQKUpperBound);
 
 BENCHMARK_TEMPLATE2(BM_qxnor_popcnt_hs, 2, 2)
     ->RangeMultiplier(2)
@@ -878,6 +919,38 @@ BENCHMARK_TEMPLATE2(BM_qxnor_popcnt2x2, 64, 64)
     ->RangeMultiplier(2)
     ->Range(kQKLowerBound, kQKUpperBound);
 
+BENCHMARK_TEMPLATE2(BM_qxnor_popcnt_mxn, 1, 2)
+    ->RangeMultiplier(2)
+    ->Range(kQKLowerBound, kQKUpperBound);
+BENCHMARK_TEMPLATE2(BM_qxnor_popcnt_mxn, 2, 2)
+    ->RangeMultiplier(2)
+    ->Range(kQKLowerBound, kQKUpperBound);
+BENCHMARK_TEMPLATE2(BM_qxnor_popcnt_mxn, 1, 3)
+->RangeMultiplier(2)
+->Range(kQKLowerBound, kQKUpperBound);
+BENCHMARK_TEMPLATE2(BM_qxnor_popcnt_mxn, 2, 3)
+    ->RangeMultiplier(2)
+    ->Range(kQKLowerBound, kQKUpperBound);
+BENCHMARK_TEMPLATE2(BM_qxnor_popcnt_mxn, 3, 3)
+    ->RangeMultiplier(2)
+    ->Range(kQKLowerBound, kQKUpperBound);
+BENCHMARK_TEMPLATE2(BM_qxnor_popcnt_mxn, 3, 4)
+    ->RangeMultiplier(2)
+    ->Range(kQKLowerBound, kQKUpperBound);
+BENCHMARK_TEMPLATE2(BM_qxnor_popcnt_mxn, 4, 4)
+    ->RangeMultiplier(2)
+    ->Range(kQKLowerBound, kQKUpperBound);
+
+BENCHMARK_TEMPLATE2(BM_qxnor_popcnt_mxn, 8, 8)
+    ->RangeMultiplier(2)
+    ->Range(kQKLowerBound, kQKUpperBound);
+BENCHMARK_TEMPLATE2(BM_qxnor_popcnt_mxn, 16, 16)
+    ->RangeMultiplier(2)
+    ->Range(kQKLowerBound, kQKUpperBound);
+BENCHMARK_TEMPLATE2(BM_qxnor_popcnt_mxn, 64, 64)
+    ->RangeMultiplier(2)
+    ->Range(kQKLowerBound, kQKUpperBound);
+
 // BENCHMARK_TEMPLATE2(BM_yuxin_conv, 8, 8)
 //     ->RangeMultiplier(2)
 //     ->Range(kQKLowerBound, kQKUpperBound);
@@ -891,15 +964,15 @@ BENCHMARK_TEMPLATE2(BM_qxnor_popcnt2x2, 64, 64)
 //     ->RangeMultiplier(2)
 //     ->Range(kQKLowerBound, kQKUpperBound);
 
-BENCHMARK_TEMPLATE2(BM_qxnor_popcnt2x2_conv3x3, 16, 16)
-    ->RangeMultiplier(2)
-    ->Range(kQKLowerBound, kQKUpperBound / 2);
-BENCHMARK_TEMPLATE2(BM_qxnor_popcnt2x2_conv3x3, 32, 32)
-    ->RangeMultiplier(2)
-    ->Range(kQKLowerBound, kQKUpperBound / 2);
-BENCHMARK_TEMPLATE2(BM_qxnor_popcnt2x2_conv3x3, 64, 64)
-    ->RangeMultiplier(2)
-    ->Range(kQKLowerBound, kQKUpperBound / 2);
+// BENCHMARK_TEMPLATE2(BM_qxnor_popcnt2x2_conv3x3, 16, 16)
+//     ->RangeMultiplier(2)
+//     ->Range(kQKLowerBound, kQKUpperBound / 2);
+// BENCHMARK_TEMPLATE2(BM_qxnor_popcnt2x2_conv3x3, 32, 32)
+//     ->RangeMultiplier(2)
+//     ->Range(kQKLowerBound, kQKUpperBound / 2);
+// BENCHMARK_TEMPLATE2(BM_qxnor_popcnt2x2_conv3x3, 64, 64)
+//     ->RangeMultiplier(2)
+//     ->Range(kQKLowerBound, kQKUpperBound / 2);
 
 // BENCHMARK_TEMPLATE2(BM_yuxin_conv3x3, 16, 16)
 //     ->RangeMultiplier(2)
