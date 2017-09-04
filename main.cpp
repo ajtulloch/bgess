@@ -1,10 +1,15 @@
-#include <Accelerate/Accelerate.h>
 #include <immintrin.h>
-#include <stdio.h>
 #include <iomanip>
 #include <iostream>
+#include <stdio.h>
+
+#include <Accelerate/Accelerate.h>
+#include <gflags/gflags.h>
+#include <glog/logging.h>
+
 #include "benchmark/benchmark.h"
 #include "yuxin.hpp"
+
 
 constexpr size_t kDefaultAlignment = 64;
 
@@ -107,7 +112,8 @@ uint64_t popcnt2(const __m256i* A, const __m256i* B, const uint64_t size) {
 }
 
 uint64_t popcnt(const __m256i* A, const __m256i* B, const uint64_t size) {
-  // ASSUME: size < 8192 (since we accumulate up to 2^8 in each 8 bit unit, which is )
+  // ASSUME: size < 8192 (since we accumulate up to 2^8 in each 8 bit unit,
+  // which is )
   A = (const __m256i*)__builtin_assume_aligned(A, kDefaultAlignment);
   B = (const __m256i*)__builtin_assume_aligned(B, kDefaultAlignment);
   __m256i zero = _mm256_setzero_si256();
@@ -176,8 +182,8 @@ uint64_t xnor_popcnt_AVX2_harley_seal(const uint8_t* A, const uint8_t* B,
 uint64_t xnor_popcnt_AVX2_harley_seal2(const uint8_t* A, const uint8_t* B,
                                        const size_t size) {
   assert(size % 32 == 0);
-  uint64_t total =
-      AVX2_harley_seal::popcnt2((const __m256i*)A, (const __m256i*)B, size / 32);
+  uint64_t total = AVX2_harley_seal::popcnt2((const __m256i*)A,
+                                             (const __m256i*)B, size / 32);
   return total;
 }
 
@@ -874,7 +880,7 @@ static void BM_sgemm(benchmark::State& state) {
 }
 
 constexpr size_t kQKLowerBound = 64;
-constexpr size_t kQKUpperBound = 4096;
+constexpr size_t kQKUpperBound = 16384;
 
 BENCHMARK_TEMPLATE2(BM_qxnor_popcnt, 2, 2)
     ->RangeMultiplier(2)
@@ -974,6 +980,16 @@ BENCHMARK_TEMPLATE4(BM_qxnor_popcnt_mxn, 32, 32, 2, 2)
     ->RangeMultiplier(2)
     ->Range(kQKLowerBound, kQKUpperBound);
 BENCHMARK_TEMPLATE4(BM_qxnor_popcnt_mxn, 64, 64, 2, 2)
+    ->RangeMultiplier(2)
+    ->Range(kQKLowerBound, kQKUpperBound);
+
+BENCHMARK_TEMPLATE4(BM_qxnor_popcnt_mxn, 2, 256, 2, 2)
+    ->RangeMultiplier(2)
+    ->Range(kQKLowerBound, kQKUpperBound);
+BENCHMARK_TEMPLATE4(BM_qxnor_popcnt_mxn, 2, 512, 2, 2)
+    ->RangeMultiplier(2)
+    ->Range(kQKLowerBound, kQKUpperBound);
+BENCHMARK_TEMPLATE4(BM_qxnor_popcnt_mxn, 2, 1024, 2, 2)
     ->RangeMultiplier(2)
     ->Range(kQKLowerBound, kQKUpperBound);
 
