@@ -21,6 +21,17 @@ ExternalProject_Add(
   )
 
 ExternalProject_Add(
+  gtest
+  GIT_REPOSITORY https://github.com/google/googletest
+  PREFIX ${CMAKE_CURRENT_BINARY_DIR}/gtest
+  CMAKE_ARGS -DCMAKE_INSTALL_PREFIX:PATH=<INSTALL_DIR> -DCMAKE_BUILD_TYPE=RELEASE
+  LOG_DOWNLOAD ON
+  LOG_CONFIGURE ON
+  LOG_BUILD ON
+  UPDATE_COMMAND ""
+  )
+
+ExternalProject_Add(
   glog
   GIT_REPOSITORY https://github.com/google/glog
   PREFIX ${CMAKE_CURRENT_BINARY_DIR}/glog
@@ -50,7 +61,7 @@ endif()
 
 
 add_executable(bgess main.cpp)
-add_dependencies(bgess googlebenchmark)
+add_dependencies(bgess googlebenchmark gflags gtest)
 
 ExternalProject_Get_Property(gflags install_dir)
 include_directories(${install_dir}/include)
@@ -60,7 +71,12 @@ ExternalProject_Get_Property(googlebenchmark install_dir)
 include_directories(${install_dir}/include)
 target_link_libraries(bgess ${install_dir}/lib/libbenchmark.a)
 
+ExternalProject_Get_Property(gtest install_dir)
+include_directories(${install_dir}/include)
+target_link_libraries(bgess ${install_dir}/lib/libgtest.a)
+
 ExternalProject_Get_Property(glog install_dir)
 include_directories(${install_dir}/include)
 target_link_libraries(bgess ${install_dir}/lib/libglog.a)
+
 target_link_libraries(bgess ${ACCELERATE})

@@ -542,11 +542,34 @@ std::uint64_t popcnt_AVX2_lookup(const uint8_t* data, const size_t n) {
 template <size_t M, size_t N>
 __attribute__((noinline)) void qgess(const uint8_t* A, const uint8_t* B,
                                      uint32_t* C, size_t Cstride, size_t QK) {
+  const size_t QK32Unroll = (QK / 32) * 32;
+  const size_t QK8Unroll = (QK / 8) * 8;
+  const size_t QK4Unroll = (QK / 4) * 4;
   for (size_t m = 0; m < M; ++m) {
     for (size_t n = 0; n < N; ++n) {
       size_t acc = 0;
-      for (size_t qk = 0; qk < QK; ++qk) {
-        acc += __builtin_popcount(A[m * QK + qk] ^ B[n * QK + qk]);
+      size_t qk = 0;
+      for (; qk < QK32Unroll; qk += 32) {
+        acc += _popcnt64(*((uint64_t*)(&A[m * QK + qk + 0])) ^
+                         *((uint64_t*)(&B[n * QK + qk + 0])));
+        acc += _popcnt64(*((uint64_t*)(&A[m * QK + qk + 8])) ^
+                         *((uint64_t*)(&B[n * QK + qk + 8])));
+        acc += _popcnt64(*((uint64_t*)(&A[m * QK + qk + 16])) ^
+                         *((uint64_t*)(&B[n * QK + qk + 16])));
+        acc += _popcnt64(*((uint64_t*)(&A[m * QK + qk + 24])) ^
+                         *((uint64_t*)(&B[n * QK + qk + 24])));
+      }
+
+      for (; qk < QK8Unroll; qk += 8) {
+        acc += _popcnt64(*((uint64_t*)(&A[m * QK + qk])) ^
+                         *((uint64_t*)(&B[n * QK + qk])));
+      }
+      for (; qk < QK4Unroll; ++qk) {
+        acc += _popcnt32(*((uint32_t*)(&A[m * QK + qk])) ^
+                         *((uint32_t*)(&B[n * QK + qk])));
+      }
+      for (; qk < QK; ++qk) {
+        acc += _popcnt32(A[m * QK + qk] ^ B[n * QK + qk]);
       }
       C[m * Cstride + n] = acc;
     }
@@ -882,6 +905,10 @@ static void BM_sgemm(benchmark::State& state) {
 constexpr size_t kQKLowerBound = 64;
 constexpr size_t kQKUpperBound = 16384;
 
+BENCHMARK_TEMPLATE2(BM_qgess, 2, 2)
+    ->RangeMultiplier(2)
+    ->Range(kQKLowerBound, kQKUpperBound);
+
 BENCHMARK_TEMPLATE2(BM_qxnor_popcnt, 2, 2)
     ->RangeMultiplier(2)
     ->Range(kQKLowerBound, kQKUpperBound);
@@ -1084,4 +1111,10 @@ BENCHMARK_TEMPLATE2(BM_sgemm, 32, 32)
 BENCHMARK_TEMPLATE2(BM_sgemm, 64, 64)
     ->RangeMultiplier(2)
     ->Range(kQKLowerBound, kQKUpperBound);
-BENCHMARK_MAIN();
+
+int main(int argc, char** argv) {
+  benchmark::Initialize(&argc, argv);
+  benchmark::RunSpecifiedBenchmarks();
+}
+
+//BENCHMARK_MAIN();
