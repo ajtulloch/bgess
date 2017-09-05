@@ -539,9 +539,8 @@ std::uint64_t popcnt_AVX2_lookup(const uint8_t* data, const size_t n) {
   return result;
 }
 
-template <size_t M, size_t N>
 __attribute__((noinline)) void qgess(const uint8_t* A, const uint8_t* B,
-                                     uint32_t* C, size_t Cstride, size_t QK) {
+                                     uint32_t* C, size_t M, size_t N, size_t Cstride, size_t QK) {
   const size_t QK32Unroll = (QK / 32) * 32;
   const size_t QK8Unroll = (QK / 8) * 8;
   const size_t QK4Unroll = (QK / 4) * 4;
@@ -658,15 +657,16 @@ __attribute__((noinline)) void qxnor_popcnt2x2(const uint8_t* A,
 //   }
 // }
 
-template <size_t M, size_t N>
 static void BM_qgess(benchmark::State& state) {
   size_t QK = state.range(0);
+  size_t M = state.range(1);
+  size_t N = state.range(2);
   std::vector<uint8_t, AlignedAllocator<uint8_t>> A(M * QK);
   std::vector<uint8_t, AlignedAllocator<uint8_t>> B(N * QK);
   std::vector<uint32_t> C(M * N);
   size_t iters = 0;
   while (state.KeepRunning()) {
-    qgess<M, N>(A.data(), B.data(), C.data(), N, QK);
+    qgess(A.data(), B.data(), C.data(), M, N, N, QK);
     ++iters;
   }
   state.counters["FLOPS"] = benchmark::Counter(2 * M * N * QK * 8 * iters,
@@ -674,9 +674,10 @@ static void BM_qgess(benchmark::State& state) {
   // runXnorBenchmark();
 }
 
-template <size_t M, size_t N>
 static void BM_qxnor_popcnt(benchmark::State& state) {
   size_t QK = state.range(0);
+  size_t M = state.range(1);
+  size_t N = state.range(2);
   std::vector<uint8_t, AlignedAllocator<uint8_t>> A(M * QK);
   std::vector<uint8_t, AlignedAllocator<uint8_t>> B(N * QK);
   std::vector<uint32_t> C(M * N);
@@ -691,9 +692,10 @@ static void BM_qxnor_popcnt(benchmark::State& state) {
                                                benchmark::Counter::kIsRate);
 }
 
-template <size_t M, size_t N>
 static void BM_qxnor_popcnt2x2(benchmark::State& state) {
   size_t QK = state.range(0);
+  size_t M = state.range(1);
+  size_t N = state.range(2);
   std::vector<uint8_t, AlignedAllocator<uint8_t>> A(M * QK);
   std::vector<uint8_t, AlignedAllocator<uint8_t>> B(N * QK);
   std::vector<uint32_t> C(M * N);
@@ -708,9 +710,10 @@ static void BM_qxnor_popcnt2x2(benchmark::State& state) {
                                                benchmark::Counter::kIsRate);
 }
 
-template <size_t M, size_t N>
 static void BM_qxnor_popcnt2x2_conv3x3(benchmark::State& state) {
   size_t QK = state.range(0);
+  size_t M = state.range(1);
+  size_t N = state.range(2);
   std::vector<uint8_t, AlignedAllocator<uint8_t>> A(M * 3 * 3 * QK);
   std::vector<uint8_t, AlignedAllocator<uint8_t>> B(N * 3 * 3 * QK);
   std::vector<uint32_t> C(M * N);
@@ -725,9 +728,10 @@ static void BM_qxnor_popcnt2x2_conv3x3(benchmark::State& state) {
       2 * M * N * QK * 8 * 3 * 3 * iters, benchmark::Counter::kIsRate);
 }
 
-template <size_t M, size_t N>
 static void BM_qxnor_popcnt_hs(benchmark::State& state) {
   size_t QK = state.range(0);
+  size_t M = state.range(1);
+  size_t N = state.range(2);
   std::vector<uint8_t, AlignedAllocator<uint8_t>> A(M * QK);
   std::vector<uint8_t, AlignedAllocator<uint8_t>> B(N * QK);
   std::vector<uint32_t> C(M * N);
@@ -742,9 +746,10 @@ static void BM_qxnor_popcnt_hs(benchmark::State& state) {
                                                benchmark::Counter::kIsRate);
 }
 
-template <size_t M, size_t N>
 static void BM_qxnor_popcnt_hs2(benchmark::State& state) {
   size_t QK = state.range(0);
+  size_t M = state.range(1);
+  size_t N = state.range(2);
   std::vector<uint8_t, AlignedAllocator<uint8_t>> A(M * QK);
   std::vector<uint8_t, AlignedAllocator<uint8_t>> B(N * QK);
   std::vector<uint32_t> C(M * N);
@@ -759,9 +764,11 @@ static void BM_qxnor_popcnt_hs2(benchmark::State& state) {
                                                benchmark::Counter::kIsRate);
 }
 
-template <size_t M, size_t N, size_t MM, size_t NN>
+template <size_t MM, size_t NN>
 static void BM_qxnor_popcnt_mxn(benchmark::State& state) {
   size_t QK = state.range(0);
+  size_t M = state.range(1);
+  size_t N = state.range(2);
   std::vector<uint8_t, AlignedAllocator<uint8_t>> A(M * QK);
   std::vector<uint8_t, AlignedAllocator<uint8_t>> B(N * QK);
   std::vector<uint32_t> C(M * N);
@@ -776,9 +783,10 @@ static void BM_qxnor_popcnt_mxn(benchmark::State& state) {
                                                benchmark::Counter::kIsRate);
 }
 
-template <size_t M, size_t N>
 static void BM_yuxin_conv(benchmark::State& state) {
   size_t QK = state.range(0);
+  size_t M = state.range(1);
+  size_t N = state.range(2);
   BitTensor X(1, 1, M, QK * 8);
   BitTensor W(N, 1, 1, QK * 8);
   BitTensor Y(1, 1, M, N);
@@ -798,9 +806,10 @@ static void BM_yuxin_conv(benchmark::State& state) {
 
 size_t divRoundUp(size_t a, size_t b) { return (a + (b - 1)) / b; }
 
-template <size_t M, size_t N>
 static void BM_yuxin_conv3x3(benchmark::State& state) {
   size_t QK = state.range(0);
+  size_t M = state.range(1);
+  size_t N = state.range(2);
   BitTensor X(1, M, M, QK * 8);
   BitTensor W(N, 3, 3, QK * 8);
   BitTensor Y(1, M, M, N);
@@ -818,9 +827,10 @@ static void BM_yuxin_conv3x3(benchmark::State& state) {
       2 * M * M * N * QK * 8 * 3 * 3 * iters, benchmark::Counter::kIsRate);
 }
 
-template <size_t M, size_t N>
 static void BM_sgemm(benchmark::State& state) {
   size_t QK = state.range(0);
+  size_t M = state.range(1);
+  size_t N = state.range(2);
   std::vector<float, AlignedAllocator<float>> A(M * QK * 8);
   std::vector<float, AlignedAllocator<float>> B(N * QK * 8);
   std::vector<float> C(M * N);
@@ -840,212 +850,24 @@ static void BM_sgemm(benchmark::State& state) {
 constexpr size_t kQKLowerBound = 64;
 constexpr size_t kQKUpperBound = 16384;
 
-BENCHMARK_TEMPLATE2(BM_qgess, 2, 2)
-    ->RangeMultiplier(2)
-    ->Range(kQKLowerBound, kQKUpperBound);
+static void GessArguments(benchmark::internal::Benchmark* b) {
+  for (int M = 2; M <= 64; M *= 2) {
+    // for (int N = 2; N <= 64; N *= 2) {
+    for (int QK = kQKLowerBound; QK <= kQKUpperBound; QK *= 2) {
+      b->Args({QK, M, M});
+    }
+  }
+}
 
-BENCHMARK_TEMPLATE2(BM_qxnor_popcnt, 2, 2)
-    ->RangeMultiplier(2)
-    ->Range(kQKLowerBound, kQKUpperBound);
-BENCHMARK_TEMPLATE2(BM_qxnor_popcnt, 4, 4)
-    ->RangeMultiplier(2)
-    ->Range(kQKLowerBound, kQKUpperBound);
-BENCHMARK_TEMPLATE2(BM_qxnor_popcnt, 8, 8)
-    ->RangeMultiplier(2)
-    ->Range(kQKLowerBound, kQKUpperBound);
-BENCHMARK_TEMPLATE2(BM_qxnor_popcnt, 16, 16)
-    ->RangeMultiplier(2)
-    ->Range(kQKLowerBound, kQKUpperBound);
-BENCHMARK_TEMPLATE2(BM_qxnor_popcnt, 32, 32)
-    ->RangeMultiplier(2)
-    ->Range(kQKLowerBound, kQKUpperBound);
-BENCHMARK_TEMPLATE2(BM_qxnor_popcnt, 64, 64)
-    ->RangeMultiplier(2)
-    ->Range(kQKLowerBound, kQKUpperBound);
-
-BENCHMARK_TEMPLATE2(BM_qxnor_popcnt_hs, 2, 2)
-    ->RangeMultiplier(2)
-    ->Range(kQKLowerBound, kQKUpperBound);
-BENCHMARK_TEMPLATE2(BM_qxnor_popcnt_hs, 4, 4)
-    ->RangeMultiplier(2)
-    ->Range(kQKLowerBound, kQKUpperBound);
-BENCHMARK_TEMPLATE2(BM_qxnor_popcnt_hs, 8, 8)
-    ->RangeMultiplier(2)
-    ->Range(kQKLowerBound, kQKUpperBound);
-BENCHMARK_TEMPLATE2(BM_qxnor_popcnt_hs, 16, 16)
-    ->RangeMultiplier(2)
-    ->Range(kQKLowerBound, kQKUpperBound);
-BENCHMARK_TEMPLATE2(BM_qxnor_popcnt_hs, 32, 32)
-    ->RangeMultiplier(2)
-    ->Range(kQKLowerBound, kQKUpperBound);
-BENCHMARK_TEMPLATE2(BM_qxnor_popcnt_hs, 64, 64)
-    ->RangeMultiplier(2)
-    ->Range(kQKLowerBound, kQKUpperBound);
-
-BENCHMARK_TEMPLATE2(BM_qxnor_popcnt_hs2, 2, 2)
-    ->RangeMultiplier(2)
-    ->Range(kQKLowerBound, kQKUpperBound);
-BENCHMARK_TEMPLATE2(BM_qxnor_popcnt_hs2, 4, 4)
-    ->RangeMultiplier(2)
-    ->Range(kQKLowerBound, kQKUpperBound);
-BENCHMARK_TEMPLATE2(BM_qxnor_popcnt_hs2, 8, 8)
-    ->RangeMultiplier(2)
-    ->Range(kQKLowerBound, kQKUpperBound);
-BENCHMARK_TEMPLATE2(BM_qxnor_popcnt_hs2, 16, 16)
-    ->RangeMultiplier(2)
-    ->Range(kQKLowerBound, kQKUpperBound);
-BENCHMARK_TEMPLATE2(BM_qxnor_popcnt_hs2, 32, 32)
-    ->RangeMultiplier(2)
-    ->Range(kQKLowerBound, kQKUpperBound);
-BENCHMARK_TEMPLATE2(BM_qxnor_popcnt_hs2, 64, 64)
-    ->RangeMultiplier(2)
-    ->Range(kQKLowerBound, kQKUpperBound);
-
-BENCHMARK_TEMPLATE2(BM_qxnor_popcnt2x2, 2, 2)
-    ->RangeMultiplier(2)
-    ->Range(kQKLowerBound, kQKUpperBound);
-BENCHMARK_TEMPLATE2(BM_qxnor_popcnt2x2, 4, 4)
-    ->RangeMultiplier(2)
-    ->Range(kQKLowerBound, kQKUpperBound);
-BENCHMARK_TEMPLATE2(BM_qxnor_popcnt2x2, 8, 8)
-    ->RangeMultiplier(2)
-    ->Range(kQKLowerBound, kQKUpperBound);
-BENCHMARK_TEMPLATE2(BM_qxnor_popcnt2x2, 16, 16)
-    ->RangeMultiplier(2)
-    ->Range(kQKLowerBound, kQKUpperBound);
-BENCHMARK_TEMPLATE2(BM_qxnor_popcnt2x2, 32, 32)
-    ->RangeMultiplier(2)
-    ->Range(kQKLowerBound, kQKUpperBound);
-BENCHMARK_TEMPLATE2(BM_qxnor_popcnt2x2, 64, 64)
-    ->RangeMultiplier(2)
-    ->Range(kQKLowerBound, kQKUpperBound);
-
-#define BENCHMARK_TEMPLATE4(n, a, b, c, d)               \
-  BENCHMARK_PRIVATE_DECLARE(n) =                         \
-      (::benchmark::internal::RegisterBenchmarkInternal( \
-          new ::benchmark::internal::FunctionBenchmark(  \
-              #n "<" #a "," #b "," #c "," #d ">", n<a, b, c, d>)))
-
-BENCHMARK_TEMPLATE4(BM_qxnor_popcnt_mxn, 2, 2, 2, 2)
-    ->RangeMultiplier(2)
-    ->Range(kQKLowerBound, kQKUpperBound);
-BENCHMARK_TEMPLATE4(BM_qxnor_popcnt_mxn, 4, 4, 2, 2)
-    ->RangeMultiplier(2)
-    ->Range(kQKLowerBound, kQKUpperBound);
-BENCHMARK_TEMPLATE4(BM_qxnor_popcnt_mxn, 8, 8, 2, 2)
-    ->RangeMultiplier(2)
-    ->Range(kQKLowerBound, kQKUpperBound);
-BENCHMARK_TEMPLATE4(BM_qxnor_popcnt_mxn, 16, 16, 2, 2)
-    ->RangeMultiplier(2)
-    ->Range(kQKLowerBound, kQKUpperBound);
-BENCHMARK_TEMPLATE4(BM_qxnor_popcnt_mxn, 32, 32, 2, 2)
-    ->RangeMultiplier(2)
-    ->Range(kQKLowerBound, kQKUpperBound);
-BENCHMARK_TEMPLATE4(BM_qxnor_popcnt_mxn, 64, 64, 2, 2)
-    ->RangeMultiplier(2)
-    ->Range(kQKLowerBound, kQKUpperBound);
-
-BENCHMARK_TEMPLATE4(BM_qxnor_popcnt_mxn, 2, 256, 2, 2)
-    ->RangeMultiplier(2)
-    ->Range(kQKLowerBound, kQKUpperBound);
-BENCHMARK_TEMPLATE4(BM_qxnor_popcnt_mxn, 2, 512, 2, 2)
-    ->RangeMultiplier(2)
-    ->Range(kQKLowerBound, kQKUpperBound);
-BENCHMARK_TEMPLATE4(BM_qxnor_popcnt_mxn, 2, 1024, 2, 2)
-    ->RangeMultiplier(2)
-    ->Range(kQKLowerBound, kQKUpperBound);
-
-BENCHMARK_TEMPLATE4(BM_qxnor_popcnt_mxn, 4, 4, 4, 4)
-    ->RangeMultiplier(2)
-    ->Range(kQKLowerBound, kQKUpperBound);
-BENCHMARK_TEMPLATE4(BM_qxnor_popcnt_mxn, 8, 8, 4, 4)
-    ->RangeMultiplier(2)
-    ->Range(kQKLowerBound, kQKUpperBound);
-BENCHMARK_TEMPLATE4(BM_qxnor_popcnt_mxn, 16, 16, 4, 4)
-    ->RangeMultiplier(2)
-    ->Range(kQKLowerBound, kQKUpperBound);
-BENCHMARK_TEMPLATE4(BM_qxnor_popcnt_mxn, 32, 32, 4, 4)
-    ->RangeMultiplier(2)
-    ->Range(kQKLowerBound, kQKUpperBound);
-BENCHMARK_TEMPLATE4(BM_qxnor_popcnt_mxn, 64, 64, 4, 4)
-    ->RangeMultiplier(2)
-    ->Range(kQKLowerBound, kQKUpperBound);
-
-BENCHMARK_TEMPLATE4(BM_qxnor_popcnt_mxn, 3, 4, 3, 4)
-    ->RangeMultiplier(2)
-    ->Range(kQKLowerBound, kQKUpperBound);
-BENCHMARK_TEMPLATE4(BM_qxnor_popcnt_mxn, 9, 8, 3, 4)
-    ->RangeMultiplier(2)
-    ->Range(kQKLowerBound, kQKUpperBound);
-BENCHMARK_TEMPLATE4(BM_qxnor_popcnt_mxn, 15, 16, 3, 4)
-    ->RangeMultiplier(2)
-    ->Range(kQKLowerBound, kQKUpperBound);
-BENCHMARK_TEMPLATE4(BM_qxnor_popcnt_mxn, 33, 32, 3, 4)
-    ->RangeMultiplier(2)
-    ->Range(kQKLowerBound, kQKUpperBound);
-BENCHMARK_TEMPLATE4(BM_qxnor_popcnt_mxn, 66, 64, 3, 4)
-    ->RangeMultiplier(2)
-    ->Range(kQKLowerBound, kQKUpperBound);
-
-BENCHMARK_TEMPLATE4(BM_qxnor_popcnt_mxn, 2, 3, 2, 3)
-    ->RangeMultiplier(2)
-    ->Range(kQKLowerBound, kQKUpperBound);
-BENCHMARK_TEMPLATE4(BM_qxnor_popcnt_mxn, 8, 9, 2, 3)
-    ->RangeMultiplier(2)
-    ->Range(kQKLowerBound, kQKUpperBound);
-BENCHMARK_TEMPLATE4(BM_qxnor_popcnt_mxn, 16, 15, 2, 3)
-    ->RangeMultiplier(2)
-    ->Range(kQKLowerBound, kQKUpperBound);
-BENCHMARK_TEMPLATE4(BM_qxnor_popcnt_mxn, 32, 33, 2, 3)
-    ->RangeMultiplier(2)
-    ->Range(kQKLowerBound, kQKUpperBound);
-BENCHMARK_TEMPLATE4(BM_qxnor_popcnt_mxn, 64, 66, 2, 3)
-    ->RangeMultiplier(2)
-    ->Range(kQKLowerBound, kQKUpperBound);
-
-// BENCHMARK_TEMPLATE2(BM_yuxin_conv, 8, 8)
-//     ->RangeMultiplier(2)
-//     ->Range(kQKLowerBound, kQKUpperBound);
-// BENCHMARK_TEMPLATE2(BM_yuxin_conv, 16, 16)
-//     ->RangeMultiplier(2)
-//     ->Range(kQKLowerBound, kQKUpperBound);
-// BENCHMARK_TEMPLATE2(BM_yuxin_conv, 32, 32)
-//     ->RangeMultiplier(2)
-//     ->Range(kQKLowerBound, kQKUpperBound);
-// BENCHMARK_TEMPLATE2(BM_yuxin_conv, 64, 64)
-//     ->RangeMultiplier(2)
-//     ->Range(kQKLowerBound, kQKUpperBound);
-
-// BENCHMARK_TEMPLATE2(BM_qxnor_popcnt2x2_conv3x3, 16, 16)
-//     ->RangeMultiplier(2)
-//     ->Range(kQKLowerBound, kQKUpperBound / 2);
-// BENCHMARK_TEMPLATE2(BM_qxnor_popcnt2x2_conv3x3, 32, 32)
-//     ->RangeMultiplier(2)
-//     ->Range(kQKLowerBound, kQKUpperBound / 2);
-// BENCHMARK_TEMPLATE2(BM_qxnor_popcnt2x2_conv3x3, 64, 64)
-//     ->RangeMultiplier(2)
-//     ->Range(kQKLowerBound, kQKUpperBound / 2);
-
-// BENCHMARK_TEMPLATE2(BM_yuxin_conv3x3, 16, 16)
-//     ->RangeMultiplier(2)
-//     ->Range(kQKLowerBound, kQKUpperBound / 2);
-// BENCHMARK_TEMPLATE2(BM_yuxin_conv3x3, 32, 32)
-//     ->RangeMultiplier(2)
-//     ->Range(kQKLowerBound, kQKUpperBound / 2);
-// BENCHMARK_TEMPLATE2(BM_yuxin_conv3x3, 64, 64)
-//     ->RangeMultiplier(2)
-//     ->Range(kQKLowerBound, kQKUpperBound / 2);
-
-// BENCHMARK_TEMPLATE2(BM_qxnor_popcnt2x2, 256, 256)
-//     ->RangeMultiplier(2)
-//     ->Range(kQKLowerBound, kQKUpperBound);
-
-BENCHMARK_TEMPLATE2(BM_sgemm, 32, 32)
-    ->RangeMultiplier(2)
-    ->Range(kQKLowerBound, kQKUpperBound);
-BENCHMARK_TEMPLATE2(BM_sgemm, 64, 64)
-    ->RangeMultiplier(2)
-    ->Range(kQKLowerBound, kQKUpperBound);
+BENCHMARK(BM_qgess)->Apply(GessArguments);
+BENCHMARK(BM_qxnor_popcnt)->Apply(GessArguments);
+BENCHMARK(BM_qxnor_popcnt_hs)->Apply(GessArguments);
+BENCHMARK(BM_qxnor_popcnt_hs2)->Apply(GessArguments);
+BENCHMARK(BM_qxnor_popcnt2x2)->Apply(GessArguments);
+BENCHMARK_TEMPLATE2(BM_qxnor_popcnt_mxn, 2, 2)->Apply(GessArguments);
+BENCHMARK_TEMPLATE2(BM_qxnor_popcnt_mxn, 1, 2)->Apply(GessArguments);
+BENCHMARK_TEMPLATE2(BM_qxnor_popcnt_mxn, 2, 1)->Apply(GessArguments);
+BENCHMARK(BM_sgemm)->Apply(GessArguments);
 
 int main(int argc, char** argv) {
   ::google::InitGoogleLogging(argv[0]);
