@@ -540,7 +540,8 @@ std::uint64_t popcnt_AVX2_lookup(const uint8_t* data, const size_t n) {
 }
 
 __attribute__((noinline)) void qgess(const uint8_t* A, const uint8_t* B,
-                                     uint32_t* C, size_t M, size_t N, size_t Cstride, size_t QK) {
+                                     uint32_t* C, size_t M, size_t N,
+                                     size_t Cstride, size_t QK) {
   const size_t QK32Unroll = (QK / 32) * 32;
   const size_t QK8Unroll = (QK / 8) * 8;
   const size_t QK4Unroll = (QK / 4) * 4;
@@ -637,25 +638,66 @@ __attribute__((noinline)) void qxnor_popcnt2x2(const uint8_t* A,
   }
 }
 
-// TEST(bgess, qgess) {
-//   constexpr size_t M = 20;
-//   constexpr size_t N = 40;
-//   std::vector<uint8_t, AlignedAllocator<uint8_t>> A(M * QK);
-//   for (auto i = 0; i < A.size(); ++i) {
-//     A[i] = rand();
-//   }
-//   std::vector<uint8_t, AlignedAllocator<uint8_t>> B(N * QK);
-//   for (auto i = 0; i < B.size(); ++i) {
-//     B[i] = rand();
-//   }
-//   std::vector<uint32_t> C(M * N);
-//   std::vector<uint32_t> CR(M * N);
-//   qgess<M, N>(A.data(), B.data(), C.data(), N, QK);
-//   qgess<M, N>(A.data(), B.data(), CR.data(), N, QK);
-//   for (auto i = 0; i < C.size(); ++i) {
-//     CHECK_EQ(i, )
-//   }
-// }
+TEST(BGESS, qgess_1_0) {
+  const size_t M = 20;
+  const size_t N = 40;
+  const size_t QK = 8;
+  std::vector<uint8_t, AlignedAllocator<uint8_t>> A(M * QK);
+  for (auto i = 0; i < A.size(); ++i) {
+    A[i] = 0xff;
+  }
+  std::vector<uint8_t, AlignedAllocator<uint8_t>> B(N * QK);
+  for (auto i = 0; i < B.size(); ++i) {
+    B[i] = 0x00;
+  }
+  std::vector<uint32_t> C(M * N);
+  qgess(A.data(), B.data(), C.data(), M, N, N, QK);
+  for (auto i = 0; i < C.size(); ++i) {
+    CHECK_EQ(C.data()[i], QK * 8) << i << ", " << C.data()[i];
+  }
+}
+
+TEST(BGESS, qgess_lookup_1_0) {
+  const size_t M = 20;
+  const size_t N = 40;
+  const size_t QK = 32;
+  std::vector<uint8_t, AlignedAllocator<uint8_t>> A(M * QK);
+  for (auto i = 0; i < A.size(); ++i) {
+    A[i] = 0xff;
+  }
+  std::vector<uint8_t, AlignedAllocator<uint8_t>> B(N * QK);
+  for (auto i = 0; i < B.size(); ++i) {
+    B[i] = 0x00;
+  }
+  std::vector<uint32_t> C(M * N);
+  std::vector<uint32_t> CR(M * N);
+  qgess(A.data(), B.data(), C.data(), M, N, N, QK);
+  qxnor_popcnt(A.data(), B.data(), CR.data(), M, N, N, QK);
+  for (auto i = 0; i < C.size(); ++i) {
+    CHECK_EQ(C.data()[i], CR.data()[i]);
+  }
+}
+
+TEST(BGESS, qgess_mxn_2x2_1_0) {
+  const size_t M = 20;
+  const size_t N = 40;
+  const size_t QK = 32;
+  std::vector<uint8_t, AlignedAllocator<uint8_t>> A(M * QK);
+  for (auto i = 0; i < A.size(); ++i) {
+    A[i] = 0xff;
+  }
+  std::vector<uint8_t, AlignedAllocator<uint8_t>> B(N * QK);
+  for (auto i = 0; i < B.size(); ++i) {
+    B[i] = 0x00;
+  }
+  std::vector<uint32_t> C(M * N);
+  std::vector<uint32_t> CR(M * N);
+  qgess(A.data(), B.data(), C.data(), M, N, N, QK);
+  qxnor_popcnt_mxn<2, 2>(A.data(), B.data(), CR.data(), M, N, N, QK);
+  for (auto i = 0; i < C.size(); ++i) {
+    CHECK_EQ(C.data()[i], CR.data()[i]);
+  }
+}
 
 static void BM_qgess(benchmark::State& state) {
   size_t QK = state.range(0);
