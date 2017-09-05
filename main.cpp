@@ -6,6 +6,7 @@
 #include <Accelerate/Accelerate.h>
 #include <gflags/gflags.h>
 #include <glog/logging.h>
+#include <gtest/gtest.h>
 
 #include "benchmark/benchmark.h"
 #include "yuxin.hpp"
@@ -44,7 +45,6 @@ __attribute__((always_inline)) static __m256i popcount(const __m256i vec) {
       /* 4 */ 1, /* 5 */ 2, /* 6 */ 2, /* 7 */ 3,
       /* 8 */ 1, /* 9 */ 2, /* a */ 2, /* b */ 3,
       /* c */ 2, /* d */ 3, /* e */ 3, /* f */ 4,
-
       /* 0 */ 0, /* 1 */ 1, /* 2 */ 1, /* 3 */ 2,
       /* 4 */ 1, /* 5 */ 2, /* 6 */ 2, /* 7 */ 3,
       /* 8 */ 1, /* 9 */ 2, /* a */ 2, /* b */ 3,
@@ -707,6 +707,26 @@ __attribute__((noinline)) void qgess_blocked(const uint8_t* A, const uint8_t* B,
   }
 }
 
+// TEST(bgess, qgess) {
+//   constexpr size_t M = 20;
+//   constexpr size_t N = 40;
+//   std::vector<uint8_t, AlignedAllocator<uint8_t>> A(M * QK);
+//   for (auto i = 0; i < A.size(); ++i) {
+//     A[i] = rand();
+//   }
+//   std::vector<uint8_t, AlignedAllocator<uint8_t>> B(N * QK);
+//   for (auto i = 0; i < B.size(); ++i) {
+//     B[i] = rand();
+//   }
+//   std::vector<uint32_t> C(M * N);
+//   std::vector<uint32_t> CR(M * N);
+//   qgess<M, N>(A.data(), B.data(), C.data(), N, QK);
+//   qgess<M, N>(A.data(), B.data(), CR.data(), N, QK);
+//   for (auto i = 0; i < C.size(); ++i) {
+//     CHECK_EQ(i, )
+//   }
+// }
+
 template <size_t M, size_t N>
 static void BM_qgess(benchmark::State& state) {
   size_t QK = state.range(0);
@@ -901,6 +921,7 @@ static void BM_sgemm(benchmark::State& state) {
   state.counters["FLOPS"] = benchmark::Counter(2 * M * N * QK * 8 * iters,
                                                benchmark::Counter::kIsRate);
 }
+
 
 constexpr size_t kQKLowerBound = 64;
 constexpr size_t kQKUpperBound = 16384;
@@ -1113,7 +1134,11 @@ BENCHMARK_TEMPLATE2(BM_sgemm, 64, 64)
     ->Range(kQKLowerBound, kQKUpperBound);
 
 int main(int argc, char** argv) {
+  ::google::InitGoogleLogging(argv[0]);
+  testing::InitGoogleTest(&argc, argv);
+  CHECK_EQ(RUN_ALL_TESTS(), 0);
   benchmark::Initialize(&argc, argv);
+
   benchmark::RunSpecifiedBenchmarks();
 }
 
