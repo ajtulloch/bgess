@@ -576,10 +576,9 @@ __attribute__((noinline)) void qgess(const uint8_t* A, const uint8_t* B,
   }
 }
 
-template <size_t M, size_t N>
 __attribute__((noinline)) void qxnor_popcnt(const uint8_t* A, const uint8_t* B,
-                                            uint32_t* C, size_t Cstride,
-                                            size_t QK) {
+                                            uint32_t* C, size_t M, size_t N,
+                                            size_t Cstride, size_t QK) {
   for (size_t m = 0; m < M; ++m) {
     for (size_t n = 0; n < N; ++n) {
       size_t acc = 0;
@@ -589,9 +588,9 @@ __attribute__((noinline)) void qxnor_popcnt(const uint8_t* A, const uint8_t* B,
   }
 }
 
-template <size_t M, size_t N>
 __attribute__((noinline)) void qxnor_popcnt_hs(const uint8_t* A,
                                                const uint8_t* B, uint32_t* C,
+                                               size_t M, size_t N,
                                                size_t Cstride, size_t QK) {
   for (size_t m = 0; m < M; ++m) {
     for (size_t n = 0; n < N; ++n) {
@@ -602,9 +601,10 @@ __attribute__((noinline)) void qxnor_popcnt_hs(const uint8_t* A,
   }
 }
 
-template <size_t M, size_t N, size_t MM, size_t NN>
+template <size_t MM, size_t NN>
 __attribute__((noinline)) void qxnor_popcnt_mxn(const uint8_t* A,
                                                 const uint8_t* B, uint32_t* C,
+                                                size_t M, size_t N,
                                                 size_t Cstride, size_t QK) {
   for (size_t m = 0; m < M; m += MM) {
     for (size_t n = 0; n < N; n += NN) {
@@ -614,10 +614,9 @@ __attribute__((noinline)) void qxnor_popcnt_mxn(const uint8_t* A,
   }
 }
 
-template <size_t M, size_t N>
 __attribute__((noinline)) void qxnor_popcnt_hs2(const uint8_t* A,
                                                 const uint8_t* B, uint32_t* C,
-                                                size_t Cstride, size_t QK) {
+                                                size_t M, size_t N, size_t Cstride, size_t QK) {
   for (size_t m = 0; m < M; ++m) {
     for (size_t n = 0; n < N; ++n) {
       size_t acc = 0;
@@ -627,82 +626,14 @@ __attribute__((noinline)) void qxnor_popcnt_hs2(const uint8_t* A,
   }
 }
 
-template <size_t M, size_t N>
 __attribute__((noinline)) void qxnor_popcnt2x2(const uint8_t* A,
                                                const uint8_t* B, uint32_t* C,
+                                               size_t M, size_t N,
                                                size_t Cstride, size_t QK) {
   for (size_t m = 0; m < M; m += 2) {
     for (size_t n = 0; n < N; n += 2) {
       xnor_popcnt_AVX2_lookup2x2(&A[m * QK], &A[(m + 1) * QK], &B[n * QK],
                                  &B[(n + 1) * QK], &C[m * Cstride + n], N, QK);
-    }
-  }
-}
-
-template <size_t M, size_t N>
-__attribute__((noinline)) void qgess_blocked(const uint8_t* A, const uint8_t* B,
-                                             uint32_t* C, size_t Cstride,
-                                             size_t QK) {
-  const __m256i lookup = _mm256_setr_epi8(
-      /* 0 */ 0, /* 1 */ 1, /* 2 */ 1, /* 3 */ 2,
-      /* 4 */ 1, /* 5 */ 2, /* 6 */ 2, /* 7 */ 3,
-      /* 8 */ 1, /* 9 */ 2, /* a */ 2, /* b */ 3,
-      /* c */ 2, /* d */ 3, /* e */ 3, /* f */ 4,
-
-      /* 0 */ 0, /* 1 */ 1, /* 2 */ 1, /* 3 */ 2,
-      /* 4 */ 1, /* 5 */ 2, /* 6 */ 2, /* 7 */ 3,
-      /* 8 */ 1, /* 9 */ 2, /* a */ 2, /* b */ 3,
-      /* c */ 2, /* d */ 3, /* e */ 3, /* f */ 4);
-
-  const __m256i low_mask = _mm256_set1_epi8(0x0f);
-
-  __m256i acc[M][N];
-  for (size_t m = 0; m < M; ++m) {
-    for (size_t n = 0; n < N; ++n) {
-      acc[m][n] = _mm256_setzero_si256();
-    }
-  }
-
-  assert(QK % 32 == 0);
-  for (size_t qk = 0; qk < (QK / 32) * 32; ++qk) {
-    __m256i Areg[M];
-    __m256i Breg[N];
-    for (size_t m = 0; m < M; ++m) {
-      Areg[m] = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(A));
-      A += 32;
-    }
-
-    for (size_t n = 0; n < N; ++n) {
-      Breg[n] = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(B));
-      B += 32;
-    }
-
-    for (size_t m = 0; m < M; ++m) {
-      for (size_t n = 0; n < N; ++n) {
-        const __m256i AxorB = _mm256_xor_si256(Areg[m], Breg[n]);
-        const __m256i lo = _mm256_and_si256(AxorB, low_mask);
-        const __m256i hi =
-            _mm256_and_si256(_mm256_srli_epi16(AxorB, 4), low_mask);
-        const __m256i popcnt1 = _mm256_shuffle_epi8(lookup, lo);
-        const __m256i popcnt2 = _mm256_shuffle_epi8(lookup, hi);
-        __m256i local = _mm256_setzero_si256();
-        local = _mm256_add_epi8(local, popcnt1);
-        local = _mm256_add_epi8(local, popcnt2);
-        acc[m][n] = _mm256_add_epi64(
-            acc[m][n], _mm256_sad_epu8(local, _mm256_setzero_si256()));
-      }
-    }
-  }
-
-  for (size_t m = 0; m < M; ++m) {
-    for (size_t n = 0; n < N; ++n) {
-      const __m256i accmn = acc[m][n];
-      uint64_t result = 0;
-      result += static_cast<uint64_t>(_mm256_extract_epi64(accmn, 0));
-      result += static_cast<uint64_t>(_mm256_extract_epi64(accmn, 1));
-      result += static_cast<uint64_t>(_mm256_extract_epi64(accmn, 2));
-      result += static_cast<uint64_t>(_mm256_extract_epi64(accmn, 3));
-      C[m * Cstride + n] = result;
     }
   }
 }
@@ -752,7 +683,7 @@ static void BM_qxnor_popcnt(benchmark::State& state) {
 
   size_t iters = 0;
   while (state.KeepRunning()) {
-    qxnor_popcnt<M, N>(A.data(), B.data(), C.data(), N, QK);
+    qxnor_popcnt(A.data(), B.data(), C.data(), M, N, N, QK);
     ++iters;
   }
 
@@ -769,7 +700,7 @@ static void BM_qxnor_popcnt2x2(benchmark::State& state) {
 
   size_t iters = 0;
   while (state.KeepRunning()) {
-    qxnor_popcnt2x2<M, N>(A.data(), B.data(), C.data(), N, QK);
+    qxnor_popcnt2x2(A.data(), B.data(), C.data(), M, N, N, QK);
     ++iters;
   }
 
@@ -786,7 +717,7 @@ static void BM_qxnor_popcnt2x2_conv3x3(benchmark::State& state) {
 
   size_t iters = 0;
   while (state.KeepRunning()) {
-    qxnor_popcnt2x2<M, N>(A.data(), B.data(), C.data(), N, QK * 3 * 3);
+    qxnor_popcnt2x2(A.data(), B.data(), C.data(), M, N, N, QK * 3 * 3);
     ++iters;
   }
 
@@ -803,7 +734,7 @@ static void BM_qxnor_popcnt_hs(benchmark::State& state) {
 
   size_t iters = 0;
   while (state.KeepRunning()) {
-    qxnor_popcnt_hs<M, N>(A.data(), B.data(), C.data(), N, QK);
+    qxnor_popcnt_hs(A.data(), B.data(), C.data(), M, N, N, QK);
     ++iters;
   }
 
@@ -820,7 +751,7 @@ static void BM_qxnor_popcnt_hs2(benchmark::State& state) {
 
   size_t iters = 0;
   while (state.KeepRunning()) {
-    qxnor_popcnt_hs2<M, N>(A.data(), B.data(), C.data(), N, QK);
+    qxnor_popcnt_hs2(A.data(), B.data(), C.data(), M, N, N, QK);
     ++iters;
   }
 
@@ -837,24 +768,7 @@ static void BM_qxnor_popcnt_mxn(benchmark::State& state) {
 
   size_t iters = 0;
   while (state.KeepRunning()) {
-    qxnor_popcnt_mxn<M, N, MM, NN>(A.data(), B.data(), C.data(), N, QK);
-    ++iters;
-  }
-
-  state.counters["FLOPS"] = benchmark::Counter(2 * M * N * QK * 8 * iters,
-                                               benchmark::Counter::kIsRate);
-}
-
-template <size_t M, size_t N>
-static void BM_qgess_blocked(benchmark::State& state) {
-  size_t QK = state.range(0);
-  std::vector<uint8_t, AlignedAllocator<uint8_t>> A(M * QK);
-  std::vector<uint8_t, AlignedAllocator<uint8_t>> B(N * QK);
-  std::vector<uint32_t> C(M * N);
-
-  size_t iters = 0;
-  while (state.KeepRunning()) {
-    qgess_blocked<M, N>(A.data(), B.data(), C.data(), N, QK);
+    qxnor_popcnt_mxn<MM, NN>(A.data(), B.data(), C.data(), M, N, N, QK);
     ++iters;
   }
 
