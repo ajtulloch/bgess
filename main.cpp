@@ -1,7 +1,7 @@
 #include <immintrin.h>
+#include <stdio.h>
 #include <iomanip>
 #include <iostream>
-#include <stdio.h>
 
 #include <Accelerate/Accelerate.h>
 #include <gflags/gflags.h>
@@ -10,7 +10,6 @@
 
 #include "benchmark/benchmark.h"
 #include "yuxin.hpp"
-
 
 constexpr size_t kDefaultAlignment = 64;
 
@@ -22,7 +21,6 @@ struct AlignedAllocator {
     void* p;
     int r = posix_memalign(&p, kAlignment, n * sizeof(T));
     if (r == 0) return static_cast<T*>(p);
-    // CHECK_EQ(r, ENOMEM);
     throw std::bad_alloc();
   }
 
@@ -126,10 +124,10 @@ uint64_t popcnt(const __m256i* A, const __m256i* B, const uint64_t size) {
   __m256i sixteens = _mm256_setzero_si256();
   __m256i twosA, twosB, foursA, foursB, eightsA, eightsB;
 
-  const uint64_t limit = size - size % 16;
+  const uint64_t size16unroll = (size / 16) * 16;
   uint64_t i = 0;
 
-  for (; i < limit; i += 16) {
+  for (; i < size16unroll; i += 16) {
     CSA256(&twosA, &ones, ones, A[i + 0] ^ B[i + 0], A[i + 1] ^ B[i + 1]);
     CSA256(&twosB, &ones, ones, A[i + 2] ^ B[i + 2], A[i + 3] ^ B[i + 3]);
     CSA256(&foursA, &twos, twos, twosA, twosB);
@@ -161,31 +159,19 @@ uint64_t popcnt(const __m256i* A, const __m256i* B, const uint64_t size) {
                                1));  // += 2 * ...
   total = _mm256_add_epi64(total, _mm256_sad_epu8(popcount(ones), zero));
 
-  for (; i < size; i++) total = _mm256_add_epi64(total, popcount(A[i] ^ B[i]));
-
-  return static_cast<uint64_t>(_mm256_extract_epi64(total, 0)) +
-         static_cast<uint64_t>(_mm256_extract_epi64(total, 1)) +
-         static_cast<uint64_t>(_mm256_extract_epi64(total, 2)) +
-         static_cast<uint64_t>(_mm256_extract_epi64(total, 3));
+  for (; i < size; i++) {
+    total =
+        _mm256_add_epi64(total, _mm256_sad_epu8(popcount(A[i] ^ B[i]), zero));
+  }
+  auto sum = static_cast<uint64_t>(_mm256_extract_epi64(total, 0)) +
+             static_cast<uint64_t>(_mm256_extract_epi64(total, 1)) +
+             static_cast<uint64_t>(_mm256_extract_epi64(total, 2)) +
+             static_cast<uint64_t>(_mm256_extract_epi64(total, 3));
+  return sum;
 }
 
 }  // namespace AVX2_harley_seal
 
-uint64_t xnor_popcnt_AVX2_harley_seal(const uint8_t* A, const uint8_t* B,
-                                      const size_t size) {
-  assert(size % 32 == 0);
-  uint64_t total =
-      AVX2_harley_seal::popcnt((const __m256i*)A, (const __m256i*)B, size / 32);
-  return total;
-}
-
-uint64_t xnor_popcnt_AVX2_harley_seal2(const uint8_t* A, const uint8_t* B,
-                                       const size_t size) {
-  assert(size % 32 == 0);
-  uint64_t total = AVX2_harley_seal::popcnt2((const __m256i*)A,
-                                             (const __m256i*)B, size / 32);
-  return total;
-}
 
 __attribute__((noinline)) void xnor_popcnt_AVX2_lookup2x2(
     const uint8_t* A0, const uint8_t* A1, const uint8_t* B0, const uint8_t* B1,
@@ -576,6 +562,22 @@ __attribute__((noinline)) void qgess(const uint8_t* A, const uint8_t* B,
   }
 }
 
+uint64_t xnor_popcnt_AVX2_harley_seal(const uint8_t* A, const uint8_t* B,
+                                      const size_t size) {
+  const auto size32Unroll = (size / 32) * 32;
+  uint64_t total =
+      AVX2_harley_seal::popcnt((const __m256i*)A, (const __m256i*)B, size / 32);
+  total += xnor_popcnt_AVX2_lookup(A + size, B + size, size - size32Unroll);
+  return total;
+}
+
+uint64_t xnor_popcnt_AVX2_harley_seal2(const uint8_t* A, const uint8_t* B,
+                                       const size_t size) {
+  assert(size % 32 == 0);
+  uint64_t total = AVX2_harley_seal::popcnt2((const __m256i*)A,
+                                             (const __m256i*)B, size / 32);
+  return total;
+}
 __attribute__((noinline)) void qxnor_popcnt(const uint8_t* A, const uint8_t* B,
                                             uint32_t* C, size_t M, size_t N,
                                             size_t Cstride, size_t QK) {
@@ -616,7 +618,8 @@ __attribute__((noinline)) void qxnor_popcnt_mxn(const uint8_t* A,
 
 __attribute__((noinline)) void qxnor_popcnt_hs2(const uint8_t* A,
                                                 const uint8_t* B, uint32_t* C,
-                                                size_t M, size_t N, size_t Cstride, size_t QK) {
+                                                size_t M, size_t N,
+                                                size_t Cstride, size_t QK) {
   for (size_t m = 0; m < M; ++m) {
     for (size_t n = 0; n < N; ++n) {
       size_t acc = 0;
@@ -653,7 +656,7 @@ TEST(BGESS, qgess_1_0) {
   std::vector<uint32_t> C(M * N);
   qgess(A.data(), B.data(), C.data(), M, N, N, QK);
   for (auto i = 0; i < C.size(); ++i) {
-    CHECK_EQ(C.data()[i], QK * 8) << i << ", " << C.data()[i];
+    EXPECT_EQ(C.data()[i], QK * 8) << i << ", " << C.data()[i];
   }
 }
 
@@ -674,7 +677,7 @@ TEST(BGESS, qgess_lookup_1_0) {
   qgess(A.data(), B.data(), C.data(), M, N, N, QK);
   qxnor_popcnt(A.data(), B.data(), CR.data(), M, N, N, QK);
   for (auto i = 0; i < C.size(); ++i) {
-    CHECK_EQ(C.data()[i], CR.data()[i]);
+    EXPECT_EQ(C.data()[i], CR.data()[i]);
   }
 }
 
@@ -695,7 +698,70 @@ TEST(BGESS, qgess_mxn_2x2_1_0) {
   qgess(A.data(), B.data(), C.data(), M, N, N, QK);
   qxnor_popcnt_mxn<2, 2>(A.data(), B.data(), CR.data(), M, N, N, QK);
   for (auto i = 0; i < C.size(); ++i) {
-    CHECK_EQ(C.data()[i], CR.data()[i]);
+    EXPECT_EQ(C.data()[i], CR.data()[i]);
+  }
+}
+
+TEST(BGESS, qgess_hs_1_0) {
+  const size_t M = 20;
+  const size_t N = 40;
+  const size_t QK = 32 * 32;
+  std::vector<uint8_t, AlignedAllocator<uint8_t>> A(M * QK);
+  for (auto i = 0; i < A.size(); ++i) {
+    A[i] = 0xff;
+  }
+  std::vector<uint8_t, AlignedAllocator<uint8_t>> B(N * QK);
+  for (auto i = 0; i < B.size(); ++i) {
+    B[i] = 0x00;
+  }
+  std::vector<uint32_t> C(M * N);
+  std::vector<uint32_t> CR(M * N);
+  qgess(A.data(), B.data(), C.data(), M, N, N, QK);
+  qxnor_popcnt_hs(A.data(), B.data(), CR.data(), M, N, N, QK);
+  for (auto i = 0; i < C.size(); ++i) {
+    EXPECT_EQ(C.data()[i], CR.data()[i]);
+  }
+}
+
+TEST(BGESS, qgess_hs2_1_0) {
+  const size_t M = 20;
+  const size_t N = 40;
+  const size_t QK = 32 * 32;
+  std::vector<uint8_t, AlignedAllocator<uint8_t>> A(M * QK);
+  for (auto i = 0; i < A.size(); ++i) {
+    A[i] = 0xff;
+  }
+  std::vector<uint8_t, AlignedAllocator<uint8_t>> B(N * QK);
+  for (auto i = 0; i < B.size(); ++i) {
+    B[i] = 0x00;
+  }
+  std::vector<uint32_t> C(M * N);
+  std::vector<uint32_t> CR(M * N);
+  qgess(A.data(), B.data(), C.data(), M, N, N, QK);
+  qxnor_popcnt_hs2(A.data(), B.data(), CR.data(), M, N, N, QK);
+  for (auto i = 0; i < C.size(); ++i) {
+    EXPECT_EQ(C.data()[i], CR.data()[i]);
+  }
+}
+
+TEST(BGESS, qgess_mxn_4x2_1_0) {
+  const size_t M = 20;
+  const size_t N = 40;
+  const size_t QK = 32;
+  std::vector<uint8_t, AlignedAllocator<uint8_t>> A(M * QK);
+  for (auto i = 0; i < A.size(); ++i) {
+    A[i] = 0xff;
+  }
+  std::vector<uint8_t, AlignedAllocator<uint8_t>> B(N * QK);
+  for (auto i = 0; i < B.size(); ++i) {
+    B[i] = 0x00;
+  }
+  std::vector<uint32_t> C(M * N);
+  std::vector<uint32_t> CR(M * N);
+  qgess(A.data(), B.data(), C.data(), M, N, N, QK);
+  qxnor_popcnt_mxn<4, 2>(A.data(), B.data(), CR.data(), M, N, N, QK);
+  for (auto i = 0; i < C.size(); ++i) {
+    EXPECT_EQ(C.data()[i], CR.data()[i]);
   }
 }
 
@@ -888,12 +954,11 @@ static void BM_sgemm(benchmark::State& state) {
                                                benchmark::Counter::kIsRate);
 }
 
-
 constexpr size_t kQKLowerBound = 64;
 constexpr size_t kQKUpperBound = 16384;
 
 static void GessArguments(benchmark::internal::Benchmark* b) {
-  for (int M = 2; M <= 64; M *= 2) {
+  for (int M = 2; M <= 1024; M *= 4) {
     // for (int N = 2; N <= 64; N *= 2) {
     for (int QK = kQKLowerBound; QK <= kQKUpperBound; QK *= 2) {
       b->Args({QK, M, M});
@@ -920,4 +985,4 @@ int main(int argc, char** argv) {
   benchmark::RunSpecifiedBenchmarks();
 }
 
-//BENCHMARK_MAIN();
+// BENCHMARK_MAIN();
