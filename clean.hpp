@@ -8,7 +8,7 @@
 
 namespace caffe2 {
 
-constexpr size_t kDefaultAlignment = 64;
+constexpr size_t kDefaultAlignment = 32;
 
 inline size_t hsum(__m256i v) {
   size_t result = 0;
@@ -49,12 +49,12 @@ inline void qgess_avx2(const uint8_t* A, const uint8_t* B,
 #define ITER                                                             \
   {                                                                      \
     for (size_t m = 0; m < M; ++m) {                                     \
-      Areg[m] = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(A)); \
+      Areg[m] = _mm256_load_si256(reinterpret_cast<const __m256i*>(A)); \
       A += 32;                                                           \
     }                                                                    \
     for (size_t n = 0; n < N; ++n) {                                     \
       const auto Breg =                                                  \
-          _mm256_loadu_si256(reinterpret_cast<const __m256i*>(B));       \
+          _mm256_load_si256(reinterpret_cast<const __m256i*>(B));       \
       B += 32;                                                           \
       for (size_t m = 0; m < M; ++m) {                                   \
         const __m256i vec = _mm256_xor_si256(Areg[m], Breg);             \
