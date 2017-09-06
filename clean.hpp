@@ -22,13 +22,12 @@ inline size_t hsum(__m256i v) {
 template <size_t M, size_t N, size_t TileDepthBytes = 32>
 inline void qgess_avx2(const uint8_t* A, const uint8_t* B,
                        float* C, const size_t Cstride,
-                       const size_t qk) {
+                       const size_t QK) {
   static_assert(TileDepthBytes == 32, "");
-  CHECK(qk < 1024);
+  CHECK(QK < 1024);
   A = (const uint8_t*)__builtin_assume_aligned(A, kDefaultAlignment);
   B = (const uint8_t*)__builtin_assume_aligned(B, kDefaultAlignment);
-  CHECK(qk % 32 == 0);
-  size_t i = 0;
+  CHECK(QK % 32 == 0);
 
   const __m256i lookup = _mm256_setr_epi8(
       /* 0 */ 0, /* 1 */ 1, /* 2 */ 1, /* 3 */ 2,
@@ -68,7 +67,6 @@ inline void qgess_avx2(const uint8_t* A, const uint8_t* B,
         local[m][n] = _mm256_add_epi8(local[m][n], popcnt2);             \
       }                                                                  \
     }                                                                    \
-    i += 32;                                                             \
   }
 
   __m256i local[M][N];
@@ -79,11 +77,13 @@ inline void qgess_avx2(const uint8_t* A, const uint8_t* B,
     }
   }
 
-  while (i + 8 * 32 <= qk) {
+  size_t qk = 0;
+  size_t QK256Unroll = (QK / 256) * 256;
+  for (; qk < QK256Unroll; qk += 256) {
     ITER ITER ITER ITER ITER ITER ITER;
   }
 
-  while (i + 32 <= qk) {
+  for (; qk < QK; qk += 32) {
     ITER;
   }
 
@@ -98,7 +98,7 @@ inline void qgess_avx2(const uint8_t* A, const uint8_t* B,
   for (size_t m = 0; m < M; ++m) {
     for (size_t n = 0; n < N; ++n) {
       C[Cstride * m + n] =
-          static_cast<float>(ssize_t(qk * 8) - ssize_t(2 * hsum(acc[m][n])));
+          static_cast<float>(ssize_t(QK * 8) - ssize_t(2 * hsum(acc[m][n])));
     }
   }
 }
