@@ -3,12 +3,13 @@
 #include <array>
 #include <iomanip>
 #include <iostream>
-
 #include <glog/logging.h>
 
 namespace caffe2 {
 
 constexpr size_t kDefaultAlignment = 32;
+constexpr size_t kTileDepthBytes = 32;
+constexpr size_t kTileSize = 2;
 
 inline size_t hsum(__m256i v) {
   size_t result = 0;
@@ -19,8 +20,8 @@ inline size_t hsum(__m256i v) {
   return result;
 };
 
-template <size_t M, size_t N, size_t TileDepthBytes = 32>
-inline void qgess_avx2(const uint8_t* A, const uint8_t* B,
+template <size_t M, size_t N, size_t TileDepthBytes = kTileDepthBytes>
+inline void qgess_packed_avx2(const uint8_t* A, const uint8_t* B,
                        float* C, const size_t Cstride,
                        const size_t QK) {
   static_assert(TileDepthBytes == 32, "");
@@ -99,6 +100,19 @@ inline void qgess_avx2(const uint8_t* A, const uint8_t* B,
     for (size_t n = 0; n < N; ++n) {
       C[Cstride * m + n] =
           static_cast<float>(ssize_t(QK * 8) - ssize_t(2 * hsum(acc[m][n])));
+    }
+  }
+}
+
+template <size_t MM, size_t NN>
+void qgemm_nt_packed_avx2(const uint8_t* A, const uint8_t* B, float* C,
+                          size_t M, size_t N, size_t Cstride, size_t QK) {
+  CHECK_EQ(M % MM, 0);
+  CHECK_EQ(N % NN, 0);
+  for (size_t m = 0; m < M; m += MM) {
+    for (size_t n = 0; n < N; n += NN) {
+      qgess_packed_avx2<MM, NN>(&A[m * QK], &B[n * QK], &C[m * Cstride + n],
+                                Cstride, QK);
     }
   }
 }

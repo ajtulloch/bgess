@@ -752,20 +752,6 @@ __attribute__((noinline)) void qxnor_popcnt_mxn(const uint8_t* A,
   }
 }
 
-template <size_t MM, size_t NN>
-__attribute__((noinline)) void qgemm_nt_avx2(const uint8_t* A, const uint8_t* B,
-                                             float* C, size_t M, size_t N,
-                                             size_t Cstride, size_t QK) {
-  CHECK_EQ(M % MM, 0);
-  CHECK_EQ(N % NN, 0);
-  for (size_t m = 0; m < M; m += MM) {
-    for (size_t n = 0; n < N; n += NN) {
-      qgess_avx2<MM, NN>(&A[m * QK], &B[n * QK], &C[m * Cstride + n], Cstride,
-                         QK);
-    }
-  }
-}
-
 __attribute__((noinline)) void qxnor_popcnt_hs2(const uint8_t* A,
                                                 const uint8_t* B, uint32_t* C,
                                                 size_t M, size_t N,
@@ -903,8 +889,8 @@ void gemmTest(TIndex M, TIndex N, TIndex K) {
     signQuantize(X, &XQ);
     signQuantize(W, &WQ);
     YQ.Resize(M, N);
-    qgemm_nt_avx2<2, 2>(XQ.data<uint8_t>(), WQ.data<uint8_t>(),
-                        YQ.mutable_data<float>(), M, N, N, K / 8);
+    qgemm_nt_packed_avx2<2, 2>(XQ.data<uint8_t>(), WQ.data<uint8_t>(),
+                               YQ.mutable_data<float>(), M, N, N, K / 8);
   }
   {
     Y.Resize(M, N);
