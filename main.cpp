@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <iomanip>
 #include <iostream>
+#include <array>
 
 #include <Accelerate/Accelerate.h>
 #include <gflags/gflags.h>
@@ -10,8 +11,169 @@
 
 #include "benchmark/benchmark.h"
 #include "yuxin.hpp"
+#include "test.hpp"
+
+size_t divRoundUp(size_t a, size_t b) { return (a + (b - 1)) / b; }
 
 constexpr size_t kDefaultAlignment = 64;
+
+constexpr size_t k2b1bXBits = 2;
+
+// How do we effiecintly quantize? One approach:
+
+// - Load 256 floats of X. We fit 8 floats per vector, so 32 loads. Group in
+// blocks of 4. On each load. - compare to form the bitmasts at each level. This
+// is 8 distinct bit vectors, each of size 32bits - so 8 elements per bitmask.
+// - Collapse these by a factor of 4 (3 blends), to get 32 elements per bitmask.
+// - AND this with [1 << 0, 1 << 1, .., 1 << 7, 1 << 0, ...]
+// - SAD this (8 wide addition) to get [1 << 0 & (b0) + 1 << 1 & (b1), ...]
+// This is 4, 16 bit numbers - which is 4x8 bit numbers for us. This is 32 bits
+// total.
+
+// Repeat this 8 times. This gives us
+
+void quantize2bStd(size_t QC, const float* __restrict__ Xdata,
+                          float offset, float inter_center_distance,
+                          std::array<uint8_t*, k2b1bXBits> XQdata) {
+  size_t C = QC * 8;
+  for (auto qc = 0; qc < QC; ++qc) {
+    // compute the block in X.
+    std::array<uint8_t, k2b1bXBits> p = {{0, 0}};
+    for (auto b = 0; b < 8; ++b) {
+      const auto c = qc * 8 + b;
+      if (c < C) {
+        float v = Xdata[qc * 8 + b];
+        if (v < offset) {
+          // zero'd already.
+        } else if (v < offset + inter_center_distance) {
+          p[0] |= 1 << b;
+        } else if (v < offset + 2 * inter_center_distance) {
+          p[1] |= 1 << b;
+        } else {
+          p[0] |= 1 << b;
+          p[1] |= 1 << b;
+        }
+      }
+    }
+    for (auto i = 0; i < k2b1bXBits; ++i) {
+      XQdata[i][qc] = p[i];
+    }
+  }
+}
+
+template <size_t TileSize, size_t TileDepthBytes>
+void qpack_tiles(const uint8_t* __restrict__ Xdata,
+                 uint8_t* __restrict__ XPdata, size_t M, size_t QK) {
+  const size_t numTiles = divRoundUp(M, TileSize);
+  const size_t numTilesDepth = divRoundUp(QK, TileDepthBytes);
+
+  // Load L1 sized tiles per thread.
+  // We read/write 2 * B * QK * TileSize bytes, so
+  // B = C / (2 * QK * TileSize)
+  for (size_t i = 0; i < numTiles; ++i) {
+    for (size_t j = 0; j < numTilesDepth; ++j) {
+      if (i != numTiles - 1 && j != numTilesDepth - 1) {
+        // we have a full tile. Just memcpy.
+        for (auto ii = 0; ii < TileSize; ++ii) {
+          auto m = i * TileSize + ii;
+          auto qk = j * TileDepthBytes;
+          std::memcpy(
+              &XPdata[TileDepthBytes * ii + TileDepthBytes * TileSize * j +
+                      TileSize * TileDepthBytes * numTilesDepth * i],
+              &Xdata[m * QK + qk], TileDepthBytes);
+        }
+      } else {
+        for (size_t ii = 0; ii < TileSize; ++ii) {
+          for (size_t jj = 0; jj < TileDepthBytes; ++jj) {
+            size_t m = i * TileSize + ii;
+            size_t qk = j * TileDepthBytes + jj;
+            uint8_t pval = 0;
+            if (m < M && qk < QK) {
+              // get value from X
+              pval = Xdata[m * QK + qk];
+            }
+            XPdata[jj + TileDepthBytes * ii + TileDepthBytes * TileSize * j +
+                   TileSize * TileDepthBytes * numTilesDepth * i] = pval;
+          }
+        }
+      }
+    }
+  }
+}
+
+void quantize2bAVX2(size_t QC, const float* __restrict__ Xdata, float offset,
+                    float inter_center_distance,
+                    std::array<uint8_t*, k2b1bXBits> XQdata) {
+  CHECK_EQ(QC % 32, 0);
+  const auto offset_plus_2_inter_center_distance =
+      _mm256_set1_ps(offset + 2 * inter_center_distance);
+  const auto offset_plus_inter_center_distance =
+      _mm256_set1_ps(offset + inter_center_distance);
+  const auto offset_ = _mm256_set1_ps(offset);
+  const auto shifts = _mm256_setr_epi8(
+      char(1 << 0), char(1 << 1), char(1 << 2), char(1 << 3), char(1 << 4),
+      char(1 << 5), char(1 << 6), char(1 << 7), char(1 << 0), char(1 << 1),
+      char(1 << 2), char(1 << 3), char(1 << 4), char(1 << 5), char(1 << 6),
+      char(1 << 7), char(1 << 0), char(1 << 1), char(1 << 2), char(1 << 3),
+      char(1 << 4), char(1 << 5), char(1 << 6), char(1 << 7), char(1 << 0),
+      char(1 << 1), char(1 << 2), char(1 << 3), char(1 << 4), char(1 << 5),
+      char(1 << 6), char(1 << 7));
+
+  // Load 32 * 8 = 256 floats.
+  for (size_t qc = 0; qc < QC; qc += 32) {
+    __m256i ps0 = _mm256_setzero_si256();
+    __m256i ps1 = _mm256_setzero_si256();
+
+    // We need to load 256 floats here. Break into 8 blocks of 32 floats each.
+    // Each block loads 32 floats.
+    // Group into 8 blocks of 32 floats.
+    for (size_t block = 0; block < 8; ++block) {
+      __m256 x0 = _mm256_load_si256(
+          reinterpret_cast<const __m256i*>(Xdata + qc * 8 + block * 32 + 0));
+      __m256 x1 = _mm256_load_si256(
+          reinterpret_cast<const __m256i*>(Xdata + qc * 8 + block * 32 + 0));
+      __m256 x2 = _mm256_load_si256(
+          reinterpret_cast<const __m256i*>(Xdata + qc * 8 + block * 32 + 0));
+      __m256 x3 = _mm256_load_si256(
+          reinterpret_cast<const __m256i*>(Xdata + qc * 8 + block * 32 + 0));
+
+      auto join = [](__m256i a, __m256i b, __m256i c, __m256i d) {
+        __m256i a_mask = _mm256_set1_epi32(0x000000ff);
+        __m256i b_mask = _mm256_set1_epi32(0x0000ff00);
+        __m256i c_mask = _mm256_set1_epi32(0x00ff0000);
+        __m256i d_mask = _mm256_set1_epi32(0xff000000);
+        return (a & a_mask) | (b & b_mask) | (c & c_mask) | (d & d_mask);
+      };
+
+      const auto x_geq_offset_plus_2_inter_center_distance =
+          join(x0 >= offset_plus_2_inter_center_distance,
+               x1 >= offset_plus_2_inter_center_distance,
+               x2 >= offset_plus_2_inter_center_distance,
+               x3 >= offset_plus_2_inter_center_distance);
+      const auto x_geq_offset =
+          join(x0 >= offset_, x1 >= offset_, x2 >= offset_, x3 >= offset_);
+      const auto x_lt_offset_plus_inter_center_distance =
+          join(x0 < offset_plus_inter_center_distance,
+               x1 < offset_plus_inter_center_distance,
+               x2 < offset_plus_inter_center_distance,
+               x3 < offset_plus_inter_center_distance);
+
+      const auto p1_mask = ~x_lt_offset_plus_inter_center_distance;
+      const auto p0_mask =
+                    (x_geq_offset & x_lt_offset_plus_inter_center_distance) |
+                    x_geq_offset_plus_2_inter_center_distance;
+
+      // Sum the 8-wide shifts.
+      const auto p0 = _mm256_sad_epu8(shifts & p0_mask, _mm256_setzero_si256());
+      const auto p1 = _mm256_sad_epu8(shifts & p1_mask, _mm256_setzero_si256());
+      // TODO: shift into 4x32 bucket and add.
+      ps0 = _mm256_add_epi8(ps0, p0);
+      ps1 = _mm256_add_epi8(ps1, p0);
+    }
+    _mm256_store_si256((__m256i*)(XQdata[0] + 32), ps0);
+    _mm256_store_si256((__m256i*)(XQdata[1] + 32), ps1);
+  }
+}
 
 template <class T, size_t kAlignment = kDefaultAlignment>
 struct AlignedAllocator {
@@ -37,7 +199,25 @@ struct AlignedAllocator {
 
 namespace AVX2_harley_seal {
 
-__attribute__((always_inline)) static __m256i popcount(const __m256i vec) {
+__attribute__((always_inline)) static __m256i popcount64(const __m256i vec) {
+  __m256i lookup1 =
+      _mm256_setr_epi8(4, 5, 5, 6, 5, 6, 6, 7, 5, 6, 6, 7, 6, 7, 7, 8, 4, 5, 5,
+                       6, 5, 6, 6, 7, 5, 6, 6, 7, 6, 7, 7, 8);
+
+  __m256i lookup2 =
+      _mm256_setr_epi8(4, 3, 3, 2, 3, 2, 2, 1, 3, 2, 2, 1, 2, 1, 1, 0, 4, 3, 3,
+                       2, 3, 2, 2, 1, 3, 2, 2, 1, 2, 1, 1, 0);
+
+  __m256i low_mask = _mm256_set1_epi8(0x0f);
+  __m256i lo = vec & low_mask;
+  __m256i hi = _mm256_srli_epi16(vec, 4) & low_mask;
+  __m256i popcnt1 = _mm256_shuffle_epi8(lookup1, lo);
+  __m256i popcnt2 = _mm256_shuffle_epi8(lookup2, hi);
+
+  return _mm256_sad_epu8(popcnt1, popcnt2);
+}
+
+__attribute__((always_inline)) static __m256i popcount8(const __m256i vec) {
   const __m256i lookup = _mm256_setr_epi8(
       /* 0 */ 0, /* 1 */ 1, /* 2 */ 1, /* 3 */ 2,
       /* 4 */ 1, /* 5 */ 2, /* 6 */ 2, /* 7 */ 3,
@@ -65,8 +245,8 @@ static __attribute__((always_inline)) void CSA256(__m256i* h, __m256i* l,
 }
 
 uint64_t popcnt2(const __m256i* A, const __m256i* B, const uint64_t size) {
-  // ASSUME: total redictuion is less than 8192 bits (since we accumulate up to
-  // 2^8 in each 8 bit unit.)
+  // ASSUME: total redictuion is less than 8192 bits (since we accumulate up
+  // to 2^8 in each 8 bit unit.)
   A = (const __m256i*)__builtin_assume_aligned(A, kDefaultAlignment);
   B = (const __m256i*)__builtin_assume_aligned(B, kDefaultAlignment);
   __m256i zero = _mm256_setzero_si256();
@@ -89,19 +269,18 @@ uint64_t popcnt2(const __m256i* A, const __m256i* B, const uint64_t size) {
     CSA256(&twosB, &ones, ones, A[i + 6] ^ B[i + 6], A[i + 7] ^ B[i + 7]);
     CSA256(&foursB, &twos, twos, twosA, twosB);
     CSA256(&eights, &fours, fours, foursA, foursB);
-    local = _mm256_add_epi64(local, popcount(eights));
+    local = _mm256_add_epi8(local, popcount8(eights));
   }
   total = _mm256_sad_epu8(local, zero);
   total = _mm256_slli_epi64(total, 3);  // * 8
+  total = _mm256_add_epi64(total, _mm256_slli_epi64(popcount64(fours),
+                                                    2));  // += 4 * ...
   total = _mm256_add_epi64(
-      total, _mm256_slli_epi64(_mm256_sad_epu8(popcount(fours), zero),
-                               2));  // += 4 * ...
-  total = _mm256_add_epi64(
-      total, _mm256_slli_epi64(_mm256_sad_epu8(popcount(twos), zero),
-                               1));  // += 2 * ...
-  total = _mm256_add_epi64(total, _mm256_sad_epu8(popcount(ones), zero));
+      total, _mm256_slli_epi64(popcount64(twos), 1));  // += 2 * ...
+  total = _mm256_add_epi64(total, popcount64(ones));
 
-  for (; i < size; i++) total = _mm256_add_epi64(total, popcount(A[i] ^ B[i]));
+  for (; i < size; i++)
+    total = _mm256_add_epi64(total, popcount64(A[i] ^ B[i]));
 
   return static_cast<uint64_t>(_mm256_extract_epi64(total, 0)) +
          static_cast<uint64_t>(_mm256_extract_epi64(total, 1)) +
@@ -143,25 +322,21 @@ uint64_t popcnt(const __m256i* A, const __m256i* B, const uint64_t size) {
     CSA256(&foursB, &twos, twos, twosA, twosB);
     CSA256(&eightsB, &fours, fours, foursA, foursB);
     CSA256(&sixteens, &eights, eights, eightsA, eightsB);
-    local = _mm256_add_epi64(local, popcount(sixteens));
+    local = _mm256_add_epi8(local, popcount8(sixteens));
   }
 
   total = _mm256_sad_epu8(local, zero);
   total = _mm256_slli_epi64(total, 4);  // * 16
   total = _mm256_add_epi64(
-      total, _mm256_slli_epi64(_mm256_sad_epu8(popcount(eights), zero),
-                               3));  // += 8 * ...
+      total, _mm256_slli_epi64(popcount64(eights), 3));  // += 8 * ...
+  total = _mm256_add_epi64(total, _mm256_slli_epi64(popcount64(fours),
+                                                    2));  // += 4 * ...
   total = _mm256_add_epi64(
-      total, _mm256_slli_epi64(_mm256_sad_epu8(popcount(fours), zero),
-                               2));  // += 4 * ...
-  total = _mm256_add_epi64(
-      total, _mm256_slli_epi64(_mm256_sad_epu8(popcount(twos), zero),
-                               1));  // += 2 * ...
-  total = _mm256_add_epi64(total, _mm256_sad_epu8(popcount(ones), zero));
+      total, _mm256_slli_epi64(popcount64(twos), 1));  // += 2 * ...
+  total = _mm256_add_epi64(total, popcount64(ones));
 
   for (; i < size; i++) {
-    total =
-        _mm256_add_epi64(total, _mm256_sad_epu8(popcount(A[i] ^ B[i]), zero));
+    total = _mm256_add_epi64(total, popcount64(A[i] ^ B[i]));
   }
   auto sum = static_cast<uint64_t>(_mm256_extract_epi64(total, 0)) +
              static_cast<uint64_t>(_mm256_extract_epi64(total, 1)) +
@@ -172,11 +347,10 @@ uint64_t popcnt(const __m256i* A, const __m256i* B, const uint64_t size) {
 
 }  // namespace AVX2_harley_seal
 
-
 __attribute__((noinline)) void xnor_popcnt_AVX2_lookup2x2(
     const uint8_t* A0, const uint8_t* A1, const uint8_t* B0, const uint8_t* B1,
     uint32_t* C, const size_t Cstride, const size_t n) {
-  assert(n % 32 == 0);
+  CHECK(n % 32 == 0);
   size_t i = 0;
   A0 = (const uint8_t*)__builtin_assume_aligned(A0, kDefaultAlignment);
   A1 = (const uint8_t*)__builtin_assume_aligned(A1, kDefaultAlignment);
@@ -283,7 +457,7 @@ __attribute__((noinline)) void xnor_popcnt_AVX2_lookupMxN(const uint8_t* A,
                                                           const size_t qk) {
   A = (const uint8_t*)__builtin_assume_aligned(A, kDefaultAlignment);
   B = (const uint8_t*)__builtin_assume_aligned(B, kDefaultAlignment);
-  assert(qk % 32 == 0);
+  CHECK(qk % 32 == 0);
   size_t i = 0;
 
   const __m256i lookup = _mm256_setr_epi8(
@@ -409,7 +583,7 @@ __attribute__((noinline)) void xnor_popcnt_AVX2_lookupMxN(const uint8_t* A,
 
 std::uint64_t xnor_popcnt_AVX2_lookup(const uint8_t* A, const uint8_t* B,
                                       const size_t n) {
-  assert(n % 32 == 0);
+  CHECK(n % 32 == 0);
   size_t i = 0;
 
   const __m256i lookup = _mm256_setr_epi8(
@@ -469,7 +643,7 @@ std::uint64_t xnor_popcnt_AVX2_lookup(const uint8_t* A, const uint8_t* B,
 }
 
 std::uint64_t popcnt_AVX2_lookup(const uint8_t* data, const size_t n) {
-  assert(n % 32 == 0);
+  CHECK(n % 32 == 0);
   size_t i = 0;
 
   const __m256i lookup = _mm256_setr_epi8(
@@ -573,9 +747,10 @@ uint64_t xnor_popcnt_AVX2_harley_seal(const uint8_t* A, const uint8_t* B,
 
 uint64_t xnor_popcnt_AVX2_harley_seal2(const uint8_t* A, const uint8_t* B,
                                        const size_t size) {
-  assert(size % 32 == 0);
+  const auto size32Unroll = (size / 32) * 32;
   uint64_t total = AVX2_harley_seal::popcnt2((const __m256i*)A,
                                              (const __m256i*)B, size / 32);
+  total += xnor_popcnt_AVX2_lookup(A + size, B + size, size - size32Unroll);
   return total;
 }
 __attribute__((noinline)) void qxnor_popcnt(const uint8_t* A, const uint8_t* B,
@@ -818,7 +993,8 @@ static void BM_qxnor_popcnt2x2(benchmark::State& state) {
                                                benchmark::Counter::kIsRate);
 }
 
-static void BM_qxnor_popcnt2x2_conv3x3(benchmark::State& state) {
+template <size_t MM, size_t NN>
+static void BM_qxnor_popcntmxn_conv3x3(benchmark::State& state) {
   size_t QK = state.range(0);
   size_t M = state.range(1);
   size_t N = state.range(2);
@@ -828,12 +1004,81 @@ static void BM_qxnor_popcnt2x2_conv3x3(benchmark::State& state) {
 
   size_t iters = 0;
   while (state.KeepRunning()) {
-    qxnor_popcnt2x2(A.data(), B.data(), C.data(), M, N, N, QK * 3 * 3);
+    qxnor_popcnt_mxn<MM, NN>(A.data(), B.data(), C.data(), M, N, N, QK * 3 * 3);
     ++iters;
   }
 
   state.counters["FLOPS"] = benchmark::Counter(
       2 * M * N * QK * 8 * 3 * 3 * iters, benchmark::Counter::kIsRate);
+}
+
+static void BM_quantize2b1b(benchmark::State& state) {
+  size_t QK = state.range(0);
+  size_t M = state.range(1);
+  size_t N = state.range(2);
+
+  std::vector<float, AlignedAllocator<float>> X(M * QK * 8);
+  std::vector<uint8_t, AlignedAllocator<uint8_t>> XQ0(M * QK);
+  std::vector<uint8_t, AlignedAllocator<uint8_t>> XQ1(M * QK);
+
+  size_t iters = 0;
+  while (state.KeepRunning()) {
+    for (size_t m = 0; m < M; ++m) {
+      quantize2bStd(QK, X.data() + m * QK * 8, 0.5, 1.5,
+                    std::array<uint8_t*, k2b1bXBits>{
+                      {XQ0.data() + m * QK, XQ1.data() + m * QK}});
+    }
+    ++iters;
+  }
+
+  state.counters["FLOPS"] = benchmark::Counter(2 * M * N * QK * 8 * iters,
+                                               benchmark::Counter::kIsRate);
+  state.counters["GBS"] =
+      benchmark::Counter(iters * 4 * M * QK * 8, benchmark::Counter::kIsRate);
+}
+
+static void BM_quantize2b1b_AVX2(benchmark::State& state) {
+  size_t QK = state.range(0);
+  size_t M = state.range(1);
+  size_t N = state.range(2);
+
+  std::vector<float, AlignedAllocator<float>> X(M * QK * 8);
+  std::vector<uint8_t, AlignedAllocator<uint8_t>> XQ0(M * QK);
+  std::vector<uint8_t, AlignedAllocator<uint8_t>> XQ1(M * QK);
+
+  size_t iters = 0;
+  while (state.KeepRunning()) {
+    for (size_t m = 0; m < M; ++m) {
+      quantize2bAVX2(QK, X.data() + m * QK * 8, 0.5, 1.5,
+                     std::array<uint8_t*, k2b1bXBits>{
+                         {XQ0.data() + m * QK, XQ1.data() + m * QK}});
+    }
+    ++iters;
+  }
+
+  state.counters["FLOPS"] = benchmark::Counter(2 * M * N * QK * 8 * iters,
+                                               benchmark::Counter::kIsRate);
+  state.counters["GBS"] = benchmark::Counter(
+      iters * 4 * M * QK * 8, benchmark::Counter::kIsRate);
+}
+
+static void BM_qpack_tiles(benchmark::State& state) {
+  size_t QK = state.range(0);
+  size_t M = state.range(1);
+  size_t N = state.range(2);
+  std::vector<uint8_t, AlignedAllocator<uint8_t>> A(M * QK);
+  std::vector<uint8_t, AlignedAllocator<uint8_t>> B(divRoundUp(M, 2) * 2 *
+                                                    divRoundUp(QK, 32) * 32);
+  size_t iters = 0;
+  while (state.KeepRunning()) {
+    qpack_tiles<2, 32>(A.data(), B.data(), M, QK);
+    ++iters;
+  }
+
+  state.counters["FLOPS"] = benchmark::Counter(2 * M * N * QK * 8 * iters,
+                                               benchmark::Counter::kIsRate);
+  state.counters["GBS"] =
+      benchmark::Counter(iters * A.size(), benchmark::Counter::kIsRate);
 }
 
 static void BM_qxnor_popcnt_hs(benchmark::State& state) {
@@ -912,7 +1157,6 @@ static void BM_yuxin_conv(benchmark::State& state) {
                                                benchmark::Counter::kIsRate);
 }
 
-size_t divRoundUp(size_t a, size_t b) { return (a + (b - 1)) / b; }
 
 static void BM_yuxin_conv3x3(benchmark::State& state) {
   size_t QK = state.range(0);
@@ -955,10 +1199,10 @@ static void BM_sgemm(benchmark::State& state) {
 }
 
 constexpr size_t kQKLowerBound = 64;
-constexpr size_t kQKUpperBound = 16384;
+constexpr size_t kQKUpperBound = 8192;
 
 static void GessArguments(benchmark::internal::Benchmark* b) {
-  for (int M = 2; M <= 1024; M *= 4) {
+  for (int M = 2; M <= 2048; M *= 4) {
     // for (int N = 2; N <= 64; N *= 2) {
     for (int QK = kQKLowerBound; QK <= kQKUpperBound; QK *= 2) {
       b->Args({QK, M, M});
@@ -966,14 +1210,21 @@ static void GessArguments(benchmark::internal::Benchmark* b) {
   }
 }
 
+BENCHMARK(BM_quantize2b1b)->Apply(GessArguments);
+BENCHMARK(BM_quantize2b1b_AVX2)->Apply(GessArguments);
+BENCHMARK(BM_qpack_tiles)->Apply(GessArguments);
+
 BENCHMARK(BM_qgess)->Apply(GessArguments);
 BENCHMARK(BM_qxnor_popcnt)->Apply(GessArguments);
 BENCHMARK(BM_qxnor_popcnt_hs)->Apply(GessArguments);
 BENCHMARK(BM_qxnor_popcnt_hs2)->Apply(GessArguments);
 BENCHMARK(BM_qxnor_popcnt2x2)->Apply(GessArguments);
+BENCHMARK(BM_yuxin_conv3x3)->Apply(GessArguments);
+BENCHMARK_TEMPLATE2(BM_qxnor_popcntmxn_conv3x3, 2, 2)->Apply(GessArguments);
 BENCHMARK_TEMPLATE2(BM_qxnor_popcnt_mxn, 2, 2)->Apply(GessArguments);
 BENCHMARK_TEMPLATE2(BM_qxnor_popcnt_mxn, 1, 2)->Apply(GessArguments);
 BENCHMARK_TEMPLATE2(BM_qxnor_popcnt_mxn, 2, 1)->Apply(GessArguments);
+
 BENCHMARK(BM_sgemm)->Apply(GessArguments);
 
 int main(int argc, char** argv) {
@@ -981,7 +1232,6 @@ int main(int argc, char** argv) {
   testing::InitGoogleTest(&argc, argv);
   CHECK_EQ(RUN_ALL_TESTS(), 0);
   benchmark::Initialize(&argc, argv);
-
   benchmark::RunSpecifiedBenchmarks();
 }
 
