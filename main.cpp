@@ -7,15 +7,16 @@
 #include <Accelerate/Accelerate.h>
 #include <gflags/gflags.h>
 #include <glog/logging.h>
+#include <glog/stl_logging.h>
 #include <gtest/gtest.h>
 
 #include "benchmark/benchmark.h"
 #include "yuxin.hpp"
 #include "test.hpp"
 
-size_t divRoundUp(size_t a, size_t b) { return (a + (b - 1)) / b; }
+#include "clean.hpp"
 
-constexpr size_t kDefaultAlignment = 64;
+namespace caffe2 {
 
 constexpr size_t k2b1bXBits = 2;
 
@@ -534,49 +535,9 @@ __attribute__((noinline)) void xnor_popcnt_AVX2_lookupMxN(const uint8_t* A,
   };
 
   for (size_t m = 0; m < M; ++m) {
-    // merge vectors
-    // if (N % 8 == 0) {
-    //   // static_assert(N % 8 == 0, "");
-    //   for (size_t n = 0; n < N; n += 8) {
-    //     const __m256i n01 = __builtin_shufflevector(
-    //         (__v32qi)acc[m][n + 0], (__v32qi)acc[m][n + 1], 0, 1, 8, 9, 16,
-    //         17, 24, 25, 32, 33, 40, 41, 48, 49, 56, 57, -1, -1, -1, -1, -1,
-    //         -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1);
-    //     const __m256i n23 = __builtin_shufflevector(
-    //         (__v32qi)acc[m][n + 2], (__v32qi)acc[m][n + 3], 0, 1, 8, 9, 16,
-    //         17, 24, 25, 32, 33, 40, 41, 48, 49, 56, 57, -1, -1, -1, -1, -1,
-    //         -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1);
-    //     const __m256i n45 = __builtin_shufflevector(
-    //         (__v32qi)acc[m][n + 4], (__v32qi)acc[m][n + 5], 0, 1, 8, 9, 16,
-    //         17, 24, 25, 32, 33, 40, 41, 48, 49, 56, 57, -1, -1, -1, -1, -1,
-    //         -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1);
-    //     const __m256i n67 = __builtin_shufflevector(
-    //         (__v32qi)acc[m][n + 6], (__v32qi)acc[m][n + 7], 0, 1, 8, 9, 16,
-    //         17, 24, 25, 32, 33, 40, 41, 48, 49, 56, 57, -1, -1, -1, -1, -1,
-    //         -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1);
-    //     const __m256i n0123 = __builtin_shufflevector(
-    //         (__v32qi)n01, (__v32qi)n23, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11,
-    //         12, 13, 14, 15, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43,
-    //         44, 45, 46, 47);
-    //     const __m256i n4567 = __builtin_shufflevector(
-    //         (__v32qi)n45, (__v32qi)n67, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11,
-    //         12, 13, 14, 15, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43,
-    //         44, 45, 46, 47);
-    //     const __m256i n0011223344556677 = _mm256_hadd_epi16(n0123, n4567);
-    //     const __m256i n0123456700000000 =
-    //         _mm256_hadd_epi16(n0011223344556677, zero);
-    //     const __m128i n01234567 = __builtin_shufflevector(
-    //         (__v16hi)n0123456700000000, (__v16hi)n0123456700000000, 0, 1, 2,
-    //         3, 4, 5, 6, 7);
-    //     const __m256i n01234567v = _mm256_cvtepi16_epi32(n01234567);
-    //     _mm256_store_si256((__m256i*)(C + Cstride * m + n), n01234567v);
-    //     // acc[m][n]
-    //   }
-    // } else {
     for (size_t n = 0; n < N; ++n) {
       C[Cstride * m + n] = r(acc[m][n]);
     }
-    // }
   }
   return;
 }
@@ -791,6 +752,20 @@ __attribute__((noinline)) void qxnor_popcnt_mxn(const uint8_t* A,
   }
 }
 
+template <size_t MM, size_t NN>
+__attribute__((noinline)) void qgemm_nt_avx2(const uint8_t* A, const uint8_t* B,
+                                             float* C, size_t M, size_t N,
+                                             size_t Cstride, size_t QK) {
+  CHECK_EQ(M % MM, 0);
+  CHECK_EQ(N % NN, 0);
+  for (size_t m = 0; m < M; m += MM) {
+    for (size_t n = 0; n < N; n += NN) {
+      qgess_avx2<MM, NN>(&A[m * QK], &B[n * QK], &C[m * Cstride + n], Cstride,
+                         QK);
+    }
+  }
+}
+
 __attribute__((noinline)) void qxnor_popcnt_hs2(const uint8_t* A,
                                                 const uint8_t* B, uint32_t* C,
                                                 size_t M, size_t N,
@@ -816,7 +791,7 @@ __attribute__((noinline)) void qxnor_popcnt2x2(const uint8_t* A,
   }
 }
 
-TEST(BGESS, qgess_1_0) {
+TEST(BGess, qgess_1_0) {
   const size_t M = 20;
   const size_t N = 40;
   const size_t QK = 8;
@@ -835,7 +810,7 @@ TEST(BGESS, qgess_1_0) {
   }
 }
 
-TEST(BGESS, qgess_lookup_1_0) {
+TEST(BGess, qgess_lookup_1_0) {
   const size_t M = 20;
   const size_t N = 40;
   const size_t QK = 32;
@@ -856,7 +831,7 @@ TEST(BGESS, qgess_lookup_1_0) {
   }
 }
 
-TEST(BGESS, qgess_mxn_2x2_1_0) {
+TEST(BGess, qgess_mxn_2x2_1_0) {
   const size_t M = 20;
   const size_t N = 40;
   const size_t QK = 32;
@@ -877,7 +852,7 @@ TEST(BGESS, qgess_mxn_2x2_1_0) {
   }
 }
 
-TEST(BGESS, qgess_hs_1_0) {
+TEST(BGess, qgess_hs_1_0) {
   const size_t M = 20;
   const size_t N = 40;
   const size_t QK = 32 * 32;
@@ -898,7 +873,7 @@ TEST(BGESS, qgess_hs_1_0) {
   }
 }
 
-TEST(BGESS, qgess_hs2_1_0) {
+TEST(BGess, qgess_hs2_1_0) {
   const size_t M = 20;
   const size_t N = 40;
   const size_t QK = 32 * 32;
@@ -919,7 +894,39 @@ TEST(BGESS, qgess_hs2_1_0) {
   }
 }
 
-TEST(BGESS, qgess_mxn_4x2_1_0) {
+void gemmTest(TIndex M, TIndex N, TIndex K) {
+  auto X = genTensor11({M, K});
+  auto W = genTensor11({N, K});
+  CHECK_EQ(K % 8, 0);
+  TensorCPU XQ, WQ, YQ, Y;
+  {
+    signQuantize(X, &XQ);
+    signQuantize(W, &WQ);
+    YQ.Resize(M, N);
+    qgemm_nt_avx2<2, 2>(XQ.data<uint8_t>(), WQ.data<uint8_t>(),
+                        YQ.mutable_data<float>(), M, N, N, K / 8);
+  }
+  {
+    Y.Resize(M, N);
+    gemmNT(M, N, K, X.data<float>(), W.data<float>(), Y.mutable_data<float>());
+  }
+  EXPECT_TRUE(Y.dims() == YQ.dims());
+  for (auto i = 0; i < Y.size(); ++i) {
+    EXPECT_NEAR(Y.data<float>()[i], YQ.data<float>()[i], 1e-3) << i;
+  }
+}
+
+TEST(QConv, GemmTest) {
+  gemmTest(2, 2, 256);
+  gemmTest(16, 64, 256);
+  gemmTest(24, 128, 256);
+  gemmTest(32, 64, 256);
+  gemmTest(40, 64, 256);
+  gemmTest(64, 64, 256);
+}
+
+
+TEST(BGess, qgess_mxn_4x2_1_0) {
   const size_t M = 20;
   const size_t N = 40;
   const size_t QK = 32;
@@ -1199,10 +1206,10 @@ static void BM_sgemm(benchmark::State& state) {
 }
 
 constexpr size_t kQKLowerBound = 64;
-constexpr size_t kQKUpperBound = 8192;
+constexpr size_t kQKUpperBound = 1024;
 
 static void GessArguments(benchmark::internal::Benchmark* b) {
-  for (int M = 2; M <= 2048; M *= 4) {
+  for (int M = 2; M <= 64; M *= 4) {
     // for (int N = 2; N <= 64; N *= 2) {
     for (int QK = kQKLowerBound; QK <= kQKUpperBound; QK *= 2) {
       b->Args({QK, M, M});
@@ -1226,6 +1233,8 @@ BENCHMARK_TEMPLATE2(BM_qxnor_popcnt_mxn, 1, 2)->Apply(GessArguments);
 BENCHMARK_TEMPLATE2(BM_qxnor_popcnt_mxn, 2, 1)->Apply(GessArguments);
 
 BENCHMARK(BM_sgemm)->Apply(GessArguments);
+
+}
 
 int main(int argc, char** argv) {
   ::google::InitGoogleLogging(argv[0]);

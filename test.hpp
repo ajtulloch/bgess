@@ -3,7 +3,7 @@
 namespace caffe2 {
 
 size_t divRoundUp(size_t a, size_t b) { return (a + (b - 1)) / b; }
-  
+
 using TIndex = size_t;
 class TensorCPU {
  public:
@@ -26,15 +26,17 @@ class TensorCPU {
   }
   size_t ndim() const { return dims_.size(); }
   size_t size_to_dim(size_t idx) const {
+    CHECK_LT(idx, dims_.size());
     size_t r = 1;
     for (auto i = 0; i < idx; ++i) {
-      r *= dims_[idx];
+      r *= dims_[i];
     }
     return r;
   }
 
   template <typename T>
   const T* data() const {
+    CHECK_EQ(size() * sizeof(T), data_.size()) << dims_;
     return (const T*)data_.data();
   }
 
@@ -43,6 +45,7 @@ class TensorCPU {
     if (data_.size() != size() * sizeof(T)) {
       data_.resize(size() * sizeof(T));
     }
+    CHECK_EQ(size() * sizeof(T), data_.size()) << dims_;
     return (T*)data_.data();
   }
   size_t capacity_{0};
@@ -212,36 +215,6 @@ inline void qgemmNT(int M, int N, int K, const uint8_t* A, const uint8_t* B,
       C[m * N + n] = K - 2 * acc;
     }
   }
-}
-
-void gemmTest(TIndex M, TIndex N, TIndex K) {
-  auto X = genTensor11({M, K});
-  auto W = genTensor11({N, K});
-  TensorCPU XQ, WQ, YQ, Y;
-  {
-    signQuantize(X, &XQ);
-    signQuantize(W, &WQ);
-    YQ.Resize(M, N);
-    qgemmNT(M, N, K, XQ.data<uint8_t>(), WQ.data<uint8_t>(),
-            YQ.mutable_data<float>());
-  }
-  {
-    Y.Resize(M, N);
-    gemmNT(M, N, K, X.data<float>(), W.data<float>(), Y.mutable_data<float>());
-  }
-  EXPECT_TRUE(Y.dims() == YQ.dims());
-  for (auto i = 0; i < Y.size(); ++i) {
-    EXPECT_NEAR(Y.data<float>()[i], YQ.data<float>()[i], 1e-3);
-  }
-}
-
-TEST(QConv, GemmTest) {
-  gemmTest(8, 64, 64);
-  gemmTest(16, 64, 256);
-  gemmTest(24, 128, 192);
-  gemmTest(32, 64, 64);
-  gemmTest(40, 64, 128);
-  gemmTest(64, 64, 256);
 }
 
 }  // namespace caffe2
