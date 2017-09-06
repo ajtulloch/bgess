@@ -63,7 +63,7 @@ void quantize2bStd(size_t QC, const float* __restrict__ Xdata,
 }
 
 template <size_t TileSize, size_t TileDepthBytes>
-void qpack_tiles(const uint8_t* __restrict__ Xdata,
+void qpack_tiles_dev(const uint8_t* __restrict__ Xdata,
                  uint8_t* __restrict__ XPdata, size_t M, size_t QK) {
   const size_t numTiles = divRoundUp(M, TileSize);
   const size_t numTilesDepth = divRoundUp(QK, TileDepthBytes);
@@ -884,13 +884,13 @@ void gemmTest(TIndex M, TIndex N, TIndex K) {
   auto X = genTensor11({M, K});
   auto W = genTensor11({N, K});
   CHECK_EQ(K % 8, 0);
-  TensorCPU XQ, WQ, YQ, Y;
+  TensorCPU XQ, XQP, WQ, WQP, YQ, Y;
   {
     signQuantize(X, &XQ);
     signQuantize(W, &WQ);
-    YQ.Resize(M, N);
-    qgemm_nt_packed_avx2<2, 2>(XQ.data<uint8_t>(), WQ.data<uint8_t>(),
-                               YQ.mutable_data<float>(), M, N, N, K / 8);
+    qpack_tiles<kTileSize, kTileDepthBytes>(XQ, 1, &XQP);
+    qpack_tiles<kTileSize, kTileDepthBytes>(WQ, 1, &WQP);
+    qgemm_nt_packed<kTileSize, kTileDepthBytes>(XQP, WQP, &YQ);
   }
   {
     Y.Resize(M, N);
@@ -903,7 +903,7 @@ void gemmTest(TIndex M, TIndex N, TIndex K) {
 }
 
 TEST(QConv, GemmTest) {
-  gemmTest(2, 2, 256);
+  gemmTest(2, 2, 512);
   gemmTest(16, 64, 256);
   gemmTest(24, 128, 256);
   gemmTest(32, 64, 256);
@@ -1064,7 +1064,7 @@ static void BM_qpack_tiles(benchmark::State& state) {
                                                     divRoundUp(QK, 32) * 32);
   size_t iters = 0;
   while (state.KeepRunning()) {
-    qpack_tiles<2, 32>(A.data(), B.data(), M, QK);
+    qpack_tiles_dev<2, 32>(A.data(), B.data(), M, QK);
     ++iters;
   }
 
