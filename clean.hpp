@@ -128,7 +128,7 @@ inline void qgess_packed(const uint8_t* __restrict__ A,
   for (; qk < QK256Unroll; qk += 256) {
     ITER ITER ITER ITER ITER ITER ITER ITER;
   }
-
+8
   for (; qk < QK; qk += 32) {
     ITER;
   }
