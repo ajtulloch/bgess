@@ -896,21 +896,27 @@ void gemmTest(TIndex M, TIndex N, TIndex K) {
     Y.Resize(M, N);
     gemmNT(M, N, K, X.data<float>(), W.data<float>(), Y.mutable_data<float>());
   }
-  EXPECT_TRUE(Y.dims() == YQ.dims());
+  EXPECT_EQ(Y.dims(), YQ.dims());
   for (auto i = 0; i < Y.size(); ++i) {
     EXPECT_NEAR(Y.data<float>()[i], YQ.data<float>()[i], 1e-3) << i;
   }
 }
 
-TEST(QConv, GemmTest) {
-  gemmTest(2, 2, 512);
+TEST(QConv, g_2_2_512) { gemmTest(2, 2, 512); }
+TEST(QConv, g_2_2_1024) { gemmTest(2, 2, 1024); }
+TEST(QConv, g_2_2_2048) { gemmTest(2, 2, 2048); }
+TEST(QConv, g_2_2_4096) { gemmTest(2, 2, 4096); }
+TEST(QConv, g_2_2_8192) { gemmTest(2, 2, 8192 - 256); }
+
+TEST(QConv, g) {
+  gemmTest(4, 2, 2048);
+  gemmTest(4, 2, 4096);
   gemmTest(16, 64, 256);
   gemmTest(24, 128, 256);
   gemmTest(32, 64, 256);
   gemmTest(40, 64, 256);
   gemmTest(64, 64, 256);
 }
-
 
 TEST(BGess, qgess_mxn_4x2_1_0) {
   const size_t M = 20;

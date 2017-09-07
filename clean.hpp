@@ -67,7 +67,7 @@ inline void qgess_packed(const uint8_t* __restrict__ A,
                          const uint8_t* __restrict__ B, float* __restrict__ C,
                          const size_t Cstride, const size_t QK) {
   static_assert(TileDepthBytes == 32, "");
-  CHECK_LT(QK, 1024);
+  CHECK_LT(QK * 8, 8192);
   A = (const uint8_t*)__builtin_assume_aligned(A, kDefaultAlignment);
   B = (const uint8_t*)__builtin_assume_aligned(B, kDefaultAlignment);
   CHECK_EQ(QK % 32, 0);
@@ -111,6 +111,10 @@ inline void qgess_packed(const uint8_t* __restrict__ A,
     }                                                                   \
   }
 
+
+  // Local accumulators. We count up to 8192 bits (256 bits per 8 bit lane, 32 8
+  // bit lanes in a vector). This is 1024 bytes.
+
   __m256i Areg[kUnrollM];
   __m256i local[kUnrollM][kUnrollN];
   for (size_t m = 0; m < kUnrollM; ++m) {
@@ -122,7 +126,7 @@ inline void qgess_packed(const uint8_t* __restrict__ A,
   size_t qk = 0;
   size_t QK256Unroll = (QK / 256) * 256;
   for (; qk < QK256Unroll; qk += 256) {
-    ITER ITER ITER ITER ITER ITER ITER;
+    ITER ITER ITER ITER ITER ITER ITER ITER;
   }
 
   for (; qk < QK; qk += 32) {
