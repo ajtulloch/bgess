@@ -90,14 +90,14 @@ inline void qgess_packed(const uint8_t* __restrict__ A,
 #define ITER                                                            \
   {                                                                     \
     for (size_t m = 0; m < kUnrollM; ++m) {                             \
-      Areg[m] = _mm256_load_si256(reinterpret_cast<const __m256i*>(A)); \
-      A += 32;                                                          \
+      Areg[m] = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(A)); \
+      A += TileDepthBytes;                                                          \
     }                                                                   \
                                                                         \
     for (size_t n = 0; n < kUnrollN; ++n) {                             \
       const auto Breg =                                                 \
-          _mm256_load_si256(reinterpret_cast<const __m256i*>(B));       \
-      B += 32;                                                          \
+          _mm256_loadu_si256(reinterpret_cast<const __m256i*>(B));       \
+      B += TileDepthBytes;                                                          \
       for (size_t m = 0; m < kUnrollM; ++m) {                           \
         const __m256i vec = _mm256_xor_si256(Areg[m], Breg);            \
         const __m256i lo = _mm256_and_si256(vec, low_mask);             \
@@ -124,11 +124,11 @@ inline void qgess_packed(const uint8_t* __restrict__ A,
   }
 
   size_t qk = 0;
-  size_t QK256Unroll = (QK / 256) * 256;
-  for (; qk < QK256Unroll; qk += 256) {
-    ITER ITER ITER ITER ITER ITER ITER ITER;
-  }
-8
+  // size_t QK256Unroll = (QK / 256) * 256;
+  // for (; qk < QK256Unroll; qk += 256) {
+  //   ITER ITER ITER ITER ITER ITER ITER ITER;
+  // }
+
   for (; qk < QK; qk += 32) {
     ITER;
   }

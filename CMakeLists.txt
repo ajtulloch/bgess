@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 2.8.9)
 project(bgess)
 set(CMAKE_CXX_STANDARD 11)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-SET(CMAKE_CXX_FLAGS  "${CMAKE_CXX_FLAGS} -mavx2 -march=haswell -mtune=native -fsanitize=address")
+SET(CMAKE_CXX_FLAGS  "${CMAKE_CXX_FLAGS} -mavx2 -march=haswell")
 
 INCLUDE(ExternalProject)
 

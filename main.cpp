@@ -12,6 +12,8 @@
 
 #include "benchmark/benchmark.h"
 #include "yuxin.hpp"
+#include "tensor.hpp"
+
 #include "test.hpp"
 
 #include "clean.hpp"
@@ -106,12 +108,12 @@ void quantize2bAVX2(size_t QC, const float* __restrict__ Xdata, float offset,
                     float inter_center_distance,
                     std::array<uint8_t*, k2b1bXBits> XQdata) {
   CHECK_EQ(QC % 32, 0);
-  const auto offset_plus_2_inter_center_distance =
+  const __m256 offset_plus_2_inter_center_distance =
       _mm256_set1_ps(offset + 2 * inter_center_distance);
-  const auto offset_plus_inter_center_distance =
+  const __m256 offset_plus_inter_center_distance =
       _mm256_set1_ps(offset + inter_center_distance);
-  const auto offset_ = _mm256_set1_ps(offset);
-  const auto shifts = _mm256_setr_epi8(
+  const __m256 offset_ = _mm256_set1_ps(offset);
+  const __m256i shifts = _mm256_setr_epi8(
       char(1 << 0), char(1 << 1), char(1 << 2), char(1 << 3), char(1 << 4),
       char(1 << 5), char(1 << 6), char(1 << 7), char(1 << 0), char(1 << 1),
       char(1 << 2), char(1 << 3), char(1 << 4), char(1 << 5), char(1 << 6),
@@ -129,14 +131,10 @@ void quantize2bAVX2(size_t QC, const float* __restrict__ Xdata, float offset,
     // Each block loads 32 floats.
     // Group into 8 blocks of 32 floats.
     for (size_t block = 0; block < 8; ++block) {
-      __m256 x0 = _mm256_load_si256(
-          reinterpret_cast<const __m256i*>(Xdata + qc * 8 + block * 32 + 0));
-      __m256 x1 = _mm256_load_si256(
-          reinterpret_cast<const __m256i*>(Xdata + qc * 8 + block * 32 + 0));
-      __m256 x2 = _mm256_load_si256(
-          reinterpret_cast<const __m256i*>(Xdata + qc * 8 + block * 32 + 0));
-      __m256 x3 = _mm256_load_si256(
-          reinterpret_cast<const __m256i*>(Xdata + qc * 8 + block * 32 + 0));
+      __m256 x0 = _mm256_load_ps(Xdata + qc * 8 + block * 32 + 0);
+      __m256 x1 = _mm256_load_ps(Xdata + qc * 8 + block * 32 + 8);
+      __m256 x2 = _mm256_load_ps(Xdata + qc * 8 + block * 32 + 16);
+      __m256 x3 = _mm256_load_ps(Xdata + qc * 8 + block * 32 + 24);
 
       auto join = [](__m256i a, __m256i b, __m256i c, __m256i d) {
         __m256i a_mask = _mm256_set1_epi32(0x000000ff);
@@ -147,17 +145,18 @@ void quantize2bAVX2(size_t QC, const float* __restrict__ Xdata, float offset,
       };
 
       const auto x_geq_offset_plus_2_inter_center_distance =
-          join(x0 >= offset_plus_2_inter_center_distance,
-               x1 >= offset_plus_2_inter_center_distance,
-               x2 >= offset_plus_2_inter_center_distance,
-               x3 >= offset_plus_2_inter_center_distance);
+          join((__v8si)x0 >= (__v8si)offset_plus_2_inter_center_distance,
+               (__v8si)x1 >= (__v8si)offset_plus_2_inter_center_distance,
+               (__v8si)x2 >= (__v8si)offset_plus_2_inter_center_distance,
+               (__v8si)x3 >= (__v8si)offset_plus_2_inter_center_distance);
       const auto x_geq_offset =
-          join(x0 >= offset_, x1 >= offset_, x2 >= offset_, x3 >= offset_);
+          join((__v8si)x0 >= (__v8si)offset_, (__v8si)x1 >= (__v8si)offset_,
+               (__v8si)x2 >= (__v8si)offset_, (__v8si)x3 >= (__v8si)offset_);
       const auto x_lt_offset_plus_inter_center_distance =
-          join(x0 < offset_plus_inter_center_distance,
-               x1 < offset_plus_inter_center_distance,
-               x2 < offset_plus_inter_center_distance,
-               x3 < offset_plus_inter_center_distance);
+          join((__v8si)x0 < (__v8si)offset_plus_inter_center_distance,
+               (__v8si)x1 < (__v8si)offset_plus_inter_center_distance,
+               (__v8si)x2 < (__v8si)offset_plus_inter_center_distance,
+               (__v8si)x3 < (__v8si)offset_plus_inter_center_distance);
 
       const auto p1_mask = ~x_lt_offset_plus_inter_center_distance;
       const auto p0_mask =
@@ -175,28 +174,6 @@ void quantize2bAVX2(size_t QC, const float* __restrict__ Xdata, float offset,
     _mm256_store_si256((__m256i*)(XQdata[1] + 32), ps1);
   }
 }
-
-template <class T, size_t kAlignment = kDefaultAlignment>
-struct AlignedAllocator {
-  typedef T value_type;
-
-  T* allocate(size_t n) {
-    void* p;
-    int r = posix_memalign(&p, kAlignment, n * sizeof(T));
-    if (r == 0) return static_cast<T*>(p);
-    throw std::bad_alloc();
-  }
-
-  void deallocate(void* p, size_t /*n*/) { free(p); }
-
-  // std::allocator_traits generates needed rebind templates automatically
-  // for allocators of type Allocator<U, Args> if Args are *type* arguments,
-  // not size_t (see 20.6.8.1), so we have to write ours explicitly.
-  template <class U>
-  struct rebind {
-    typedef AlignedAllocator<U, kAlignment> other;
-  };
-};
 
 namespace AVX2_harley_seal {
 
@@ -890,6 +867,8 @@ void gemmTest(TIndex M, TIndex N, TIndex K) {
     signQuantize(W, &WQ);
     qpack_tiles<kTileSize, kTileDepthBytes>(XQ, 1, &XQP);
     qpack_tiles<kTileSize, kTileDepthBytes>(WQ, 1, &WQP);
+    LOG(ERROR) << "XQP: " << XQP.dims();
+    LOG(ERROR) << "WQP: " << WQP.dims();
     qgemm_nt_packed<kTileSize, kTileDepthBytes>(XQP, WQP, &YQ);
   }
   {
@@ -909,13 +888,15 @@ TEST(QConv, g_2_2_4096) { gemmTest(2, 2, 4096); }
 TEST(QConv, g_2_2_8192) { gemmTest(2, 2, 8192 - 256); }
 
 TEST(QConv, g) {
-  gemmTest(4, 2, 2048);
-  gemmTest(4, 2, 4096);
-  gemmTest(16, 64, 256);
-  gemmTest(24, 128, 256);
-  gemmTest(32, 64, 256);
-  gemmTest(40, 64, 256);
-  gemmTest(64, 64, 256);
+  gemmTest(64, 4, 4096);
+  // gemmTest(40, 64, 256);
+  // gemmTest(64, 64, 256);
+  // gemmTest(4, 2, 4096);
+  // gemmTest(16, 64, 256);
+  // gemmTest(24, 128, 256);
+  // gemmTest(32, 64, 256);
+  // gemmTest(40, 64, 256);
+  // gemmTest(64, 64, 256);
 }
 
 TEST(BGess, qgess_mxn_4x2_1_0) {
