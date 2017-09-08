@@ -39,7 +39,30 @@ void quantize2bStd(size_t QC, const float* __restrict__ Xdata,
                           float offset, float inter_center_distance,
                           std::array<uint8_t*, k2b1bXBits> XQdata) {
   size_t C = QC * 8;
-  for (auto qc = 0; qc < QC; ++qc) {
+  size_t QCUnroll = (C / 8) / 4 * 4;
+  size_t qc = 0;
+  for (; qc < QCUnroll; qc += 4) {
+    // compute the block in X.
+    std::array<uint32_t, k2b1bXBits> p = {{0, 0}};
+    for (auto b = 0; b < 32; ++b) {
+      const auto c = qc * 8 + b;
+      float v = Xdata[qc * 8 + b];
+      if (v < offset) {
+        // zero'd already.
+      } else if (v < offset + inter_center_distance) {
+        p[0] |= 1 << b;
+      } else if (v < offset + 2 * inter_center_distance) {
+        p[1] |= 1 << b;
+      } else {
+        p[0] |= 1 << b;
+        p[1] |= 1 << b;
+      }
+    }
+    for (auto i = 0; i < k2b1bXBits; ++i) {
+      (*(uint32_t*)(&(XQdata[i][qc]))) = p[i];
+    }
+  }
+  for (; qc < QC; ++qc) {
     // compute the block in X.
     std::array<uint8_t, k2b1bXBits> p = {{0, 0}};
     for (auto b = 0; b < 8; ++b) {
@@ -123,6 +146,7 @@ void quantize2bAVX2(size_t QC, const float* __restrict__ Xdata, float offset,
       char(1 << 6), char(1 << 7));
 
   // Load 32 * 8 = 256 floats.
+  __m256i zero = _mm256_setzero_si256();
   for (size_t qc = 0; qc < QC; qc += 32) {
     __m256i ps0 = _mm256_setzero_si256();
     __m256i ps1 = _mm256_setzero_si256();
@@ -149,9 +173,11 @@ void quantize2bAVX2(size_t QC, const float* __restrict__ Xdata, float offset,
                (__v8si)x1 >= (__v8si)offset_plus_2_inter_center_distance,
                (__v8si)x2 >= (__v8si)offset_plus_2_inter_center_distance,
                (__v8si)x3 >= (__v8si)offset_plus_2_inter_center_distance);
+
       const auto x_geq_offset =
           join((__v8si)x0 >= (__v8si)offset_, (__v8si)x1 >= (__v8si)offset_,
                (__v8si)x2 >= (__v8si)offset_, (__v8si)x3 >= (__v8si)offset_);
+
       const auto x_lt_offset_plus_inter_center_distance =
           join((__v8si)x0 < (__v8si)offset_plus_inter_center_distance,
                (__v8si)x1 < (__v8si)offset_plus_inter_center_distance,
@@ -164,11 +190,11 @@ void quantize2bAVX2(size_t QC, const float* __restrict__ Xdata, float offset,
                     x_geq_offset_plus_2_inter_center_distance;
 
       // Sum the 8-wide shifts.
-      const auto p0 = _mm256_sad_epu8(shifts & p0_mask, _mm256_setzero_si256());
-      const auto p1 = _mm256_sad_epu8(shifts & p1_mask, _mm256_setzero_si256());
+      const auto p0 = _mm256_sad_epu8(shifts & p0_mask, zero);
+      const auto p1 = _mm256_sad_epu8(shifts & p1_mask, zero);
       // TODO: shift into 4x32 bucket and add.
-      ps0 = _mm256_add_epi8(ps0, p0);
-      ps1 = _mm256_add_epi8(ps1, p0);
+      ps0 = _mm256_add_epi64(ps0, _mm256_slli_epi64(p0, 8 * block));
+      ps1 = _mm256_add_epi64(ps1, _mm256_slli_epi64(p1, 8 * block));
     }
     _mm256_store_si256((__m256i*)(XQdata[0] + 32), ps0);
     _mm256_store_si256((__m256i*)(XQdata[1] + 32), ps1);
@@ -867,8 +893,6 @@ void gemmTest(TIndex M, TIndex N, TIndex K) {
     signQuantize(W, &WQ);
     qpack_tiles<kTileSize, kTileDepthBytes>(XQ, 1, &XQP);
     qpack_tiles<kTileSize, kTileDepthBytes>(WQ, 1, &WQP);
-    LOG(ERROR) << "XQP: " << XQP.dims();
-    LOG(ERROR) << "WQP: " << WQP.dims();
     qgemm_nt_packed<kTileSize, kTileDepthBytes>(XQP, WQP, &YQ);
   }
   {
@@ -881,23 +905,13 @@ void gemmTest(TIndex M, TIndex N, TIndex K) {
   }
 }
 
+TEST(QConv, g_2_2_256) { gemmTest(2, 2, 256); }
 TEST(QConv, g_2_2_512) { gemmTest(2, 2, 512); }
 TEST(QConv, g_2_2_1024) { gemmTest(2, 2, 1024); }
 TEST(QConv, g_2_2_2048) { gemmTest(2, 2, 2048); }
 TEST(QConv, g_2_2_4096) { gemmTest(2, 2, 4096); }
 TEST(QConv, g_2_2_8192) { gemmTest(2, 2, 8192 - 256); }
 
-TEST(QConv, g) {
-  gemmTest(64, 4, 4096);
-  // gemmTest(40, 64, 256);
-  // gemmTest(64, 64, 256);
-  // gemmTest(4, 2, 4096);
-  // gemmTest(16, 64, 256);
-  // gemmTest(24, 128, 256);
-  // gemmTest(32, 64, 256);
-  // gemmTest(40, 64, 256);
-  // gemmTest(64, 64, 256);
-}
 
 TEST(BGess, qgess_mxn_4x2_1_0) {
   const size_t M = 20;
@@ -1079,6 +1093,33 @@ static void BM_qxnor_popcnt_hs(benchmark::State& state) {
                                                benchmark::Counter::kIsRate);
 }
 
+static void BM_qgemm(benchmark::State& state) {
+  size_t QK = state.range(0);
+  size_t M = state.range(1);
+  size_t N = state.range(2);
+  const size_t K = QK * 8;
+  CHECK_EQ(K % 8, 0);
+
+  TensorCPU XQ, WQ, XQP, WQP, YQ;
+
+  auto X = genTensor11({M, K});
+  auto W = genTensor11({N, K});
+
+  signQuantize(X, &XQ);
+  signQuantize(W, &WQ);
+  qpack_tiles<kTileSize, kTileDepthBytes>(XQ, 1, &XQP);
+  qpack_tiles<kTileSize, kTileDepthBytes>(WQ, 1, &WQP);
+
+  size_t iters = 0;
+  while (state.KeepRunning()) {
+    qgemm_nt_packed<kTileSize, kTileDepthBytes>(XQP, WQP, &YQ);
+    ++iters;
+  }
+
+  state.counters["FLOPS"] = benchmark::Counter(2 * M * N * QK * 8 * iters,
+                                               benchmark::Counter::kIsRate);
+}
+
 static void BM_qxnor_popcnt_hs2(benchmark::State& state) {
   size_t QK = state.range(0);
   size_t M = state.range(1);
@@ -1188,6 +1229,12 @@ static void GessArguments(benchmark::internal::Benchmark* b) {
       b->Args({QK, M, M});
     }
   }
+
+  for (auto C: std::vector<size_t>{512}) {
+    for (auto S : std::vector<size_t>{16, 26, 52, 104}) {
+      b->Args({3 * 3 * int(C / 8), 2, 2});
+    }
+  }
 }
 
 BENCHMARK(BM_quantize2b1b)->Apply(GessArguments);
@@ -1199,12 +1246,14 @@ BENCHMARK(BM_qxnor_popcnt)->Apply(GessArguments);
 BENCHMARK(BM_qxnor_popcnt_hs)->Apply(GessArguments);
 BENCHMARK(BM_qxnor_popcnt_hs2)->Apply(GessArguments);
 BENCHMARK(BM_qxnor_popcnt2x2)->Apply(GessArguments);
-BENCHMARK(BM_yuxin_conv3x3)->Apply(GessArguments);
-BENCHMARK_TEMPLATE2(BM_qxnor_popcntmxn_conv3x3, 2, 2)->Apply(GessArguments);
 BENCHMARK_TEMPLATE2(BM_qxnor_popcnt_mxn, 2, 2)->Apply(GessArguments);
 BENCHMARK_TEMPLATE2(BM_qxnor_popcnt_mxn, 1, 2)->Apply(GessArguments);
 BENCHMARK_TEMPLATE2(BM_qxnor_popcnt_mxn, 2, 1)->Apply(GessArguments);
 
+// BENCHMARK(BM_yuxin_conv3x3)->Apply(GessArguments);
+// BENCHMARK_TEMPLATE2(BM_qxnor_popcntmxn_conv3x3, 2, 2)->Apply(GessArguments);
+
+BENCHMARK(BM_qgemm)->Apply(GessArguments);
 BENCHMARK(BM_sgemm)->Apply(GessArguments);
 
 }

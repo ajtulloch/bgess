@@ -67,7 +67,7 @@ inline void qgess_packed(const uint8_t* __restrict__ A,
                          const uint8_t* __restrict__ B, float* __restrict__ C,
                          const size_t Cstride, const size_t QK) {
   static_assert(TileDepthBytes == 32, "");
-  CHECK_LT(QK * 8, 8192);
+  DCHECK_LT(QK * 8, 8192);
   A = (const uint8_t*)__builtin_assume_aligned(A, kDefaultAlignment);
   B = (const uint8_t*)__builtin_assume_aligned(B, kDefaultAlignment);
   CHECK_EQ(QK % 32, 0);
@@ -150,8 +150,9 @@ inline void qgess_packed(const uint8_t* __restrict__ A,
 }
 
 template <size_t TileSize, size_t TileDepthBytes>
-inline void qgemm_nt_packed(const TensorCPU& A, const TensorCPU& B,
-                            TensorCPU* C) {
+__attribute__((noinline)) void qgemm_nt_packed(const TensorCPU& A,
+                                               const TensorCPU& B,
+                                               TensorCPU* C) {
   CHECK_EQ(A.ndim(), 4);
   CHECK_EQ(B.ndim(), 4);
   CHECK_EQ(A.dim(2), TileSize);
@@ -172,22 +173,52 @@ inline void qgemm_nt_packed(const TensorCPU& A, const TensorCPU& B,
   const auto* Bdata = B.data<uint8_t>();
   auto* Cdata = C->mutable_data<float>();
 
+  // Assume TxT tile. Each input slice is of size T x (K/8) bytes, and the output
+  // is a tile of size T x T x sizeof(float) bytes. We want the sum of this to fit
+  // in L1 cache. This means for a block number of tiles B , we load B * T * K /
+  // 8 + B * T * K / 8 + B * B * T * T * sizeof(float).
+
+  // If cache size = C, we get
+  // B = 1/(32 * T) (sqrt(256 C + K^2) - K)
+  // taking floor (by integer division), gives the result.
+
+  // Assume 64KB L1 cache.
+  constexpr size_t kL1CacheSizeBytes = 64 * 1024;
+  size_t tilesPerBlock =
+    std::floor((std::sqrt(256 * kL1CacheSizeBytes + K * K) - K) / (32 * TileSize));
+  if (tilesPerBlock < 1) {
+    tilesPerBlock = 1;
+  }
   CHECK_LT(K, std::pow(2, 16));
   CHECK_EQ(M % TileSize, 0);
   CHECK_EQ(N % TileSize, 0);
   const size_t MNumTiles = M / TileSize;
   const size_t NNumTiles = N / TileSize;
+  const size_t MNumBlocks = divRoundUp(MNumTiles, tilesPerBlock);
+  const size_t NNumBlocks = divRoundUp(NNumTiles, tilesPerBlock);
 
-  for (size_t mTileIdx = 0; mTileIdx < MNumTiles; ++mTileIdx) {
-    for (size_t nTileIdx = 0; nTileIdx < NNumTiles; ++nTileIdx) {
-      // A layout: [M/TileSize][QK / TileDepth][TileSize][TileDepth]
-      // C layout: [M/TileSize][TileSize][N/TileSize][TileSize]
-      const auto* Ablock = &Adata[mTileIdx * QK * TileSize];
-      const auto* Bblock = &Bdata[nTileIdx * QK * TileSize];
-      auto* Cblock = &Cdata[mTileIdx * TileSize * N + nTileIdx * TileSize];
-      const size_t Cstride = N;
-      qgess_packed<TileSize, TileSize, TileDepthBytes>(Ablock, Bblock, Cblock,
-                                                       Cstride, QK);
+  for (size_t mBlockIdx = 0; mBlockIdx < MNumBlocks; ++mBlockIdx) {
+    for (size_t nBlockIdx = 0; nBlockIdx < NNumBlocks; ++nBlockIdx) {
+      const size_t mTileStart = mBlockIdx * tilesPerBlock;
+      const size_t nTileStart = nBlockIdx * tilesPerBlock;
+      for (size_t mBlockTileIdx = 0; mBlockTileIdx < tilesPerBlock &&
+                                     mBlockTileIdx + mTileStart < MNumTiles;
+           ++mBlockTileIdx) {
+        const size_t mTileIdx = mBlockTileIdx + mTileStart;
+        for (size_t nBlockTileIdx = 0; nBlockTileIdx < tilesPerBlock &&
+                                       nBlockTileIdx + nTileStart < NNumTiles;
+             ++nBlockTileIdx) {
+          const size_t nTileIdx = nBlockTileIdx + nTileStart;
+          // A layout: [M/TileSize][QK / TileDepth][TileSize][TileDepth]
+          // C layout: [M/TileSize][TileSize][N/TileSize][TileSize]
+          const auto* Ablock = &Adata[mTileIdx * QK * TileSize];
+          const auto* Bblock = &Bdata[nTileIdx * QK * TileSize];
+          auto* Cblock = &Cdata[mTileIdx * TileSize * N + nTileIdx * TileSize];
+          const size_t Cstride = N;
+          qgess_packed<TileSize, TileSize, TileDepthBytes>(
+              Ablock, Bblock, Cblock, Cstride, QK);
+        }
+      }
     }
   }
 }
