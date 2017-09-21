@@ -1,45 +1,45 @@
 #pragma once
 
 #include "tensor.hpp"
-
+#include "ulp.h"
 
 namespace caffe2 {
 
-size_t divRoundUp(size_t a, size_t b) { return (a + (b - 1)) / b; }
+// size_t divRoundUp(size_t a, size_t b) { return (a + (b - 1)) / b; }
 
-struct ConvArgs {
-  int stride_w{1};
-  int stride_h{1};
-  int pad_l{0};
-  int pad_t{0};
-  int pad_b{0};
-  int pad_r{0};
-};
+// struct ConvArgs {
+//   int stride_w{1};
+//   int stride_h{1};
+//   int pad_l{0};
+//   int pad_t{0};
+//   int pad_b{0};
+//   int pad_r{0};
+// };
 
-void signQuantize(const TensorCPU& X, TensorCPU* XQ) {
-  // CAFFE_ENFORCE_GT(X.ndim(), 1);
-  const auto N = X.size_to_dim(X.ndim() - 1);
-  auto C = X.size() / N;
-  const auto QC = divRoundUp(C, 8);
-  auto XQs = X.dims();
-  XQs[X.ndim() - 1] = QC;
-  XQ->Resize(XQs);
-  const float* Xdata = X.data<float>();
-  uint8_t* XQdata = XQ->mutable_data<uint8_t>();
-  for (auto n = 0; n < N; ++n) {
-    for (auto qc = 0; qc < QC; ++qc) {
-      // compute the block in X.
-      uint8_t p = 0;
-      for (auto b = 0; b < 8; ++b) {
-        const auto c = qc * 8 + b;
-        if (c < C) {
-          p |= (Xdata[c + C * n] > 0) << b;
-        }
-      }
-      XQdata[qc + QC * n] = p;
-    }
-  }
-}
+// void signQuantize(const TensorCPU& X, TensorCPU* XQ) {
+//   // CAFFE_ENFORCE_GT(X.ndim(), 1);
+//   const auto N = X.size_to_dim(X.ndim() - 1);
+//   auto C = X.size() / N;
+//   const auto QC = divRoundUp(C, 8);
+//   auto XQs = X.dims();
+//   XQs[X.ndim() - 1] = QC;
+//   XQ->Resize(XQs);
+//   const float* Xdata = X.data<float>();
+//   uint8_t* XQdata = XQ->mutable_data<uint8_t>();
+//   for (auto n = 0; n < N; ++n) {
+//     for (auto qc = 0; qc < QC; ++qc) {
+//       // compute the block in X.
+//       uint8_t p = 0;
+//       for (auto b = 0; b < 8; ++b) {
+//         const auto c = qc * 8 + b;
+//         if (c < C) {
+//           p |= (Xdata[c + C * n] > 0) << b;
+//         }
+//       }
+//       XQdata[qc + QC * n] = p;
+//     }
+//   }
+// }
 
 void conv(const ConvArgs& args, const TensorCPU& X, const TensorCPU& W,
           const TensorCPU* b, TensorCPU* Y) {

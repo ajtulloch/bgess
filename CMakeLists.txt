@@ -1,13 +1,25 @@
 cmake_minimum_required(VERSION 2.8.9)
 project(bgess)
-set(CMAKE_CXX_STANDARD 11)
+set(CMAKE_CXX_STANDARD 14)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-SET(CMAKE_CXX_FLAGS  "${CMAKE_CXX_FLAGS} -mavx2 -march=haswell")
+SET(CMAKE_CXX_FLAGS  "${CMAKE_CXX_FLAGS} -mavx2 -march=haswell -Wno-c++11-narrowing")
 
 INCLUDE(ExternalProject)
 
 # Set default ExternalProject root directory
 SET_DIRECTORY_PROPERTIES(PROPERTIES EP_PREFIX ${CMAKE_BINARY_DIR}/third_party)
+
+set(eigen_VERSION "3.3.3" )
+
+ExternalProject_Add( eigen
+  URL "http://bitbucket.org/eigen/eigen/get/${eigen_VERSION}.tar.gz"
+  PREFIX ${CMAKE_CURRENT_BINARY_DIR}/eigen
+  CMAKE_ARGS -DCMAKE_INSTALL_PREFIX:PATH=<INSTALL_DIR> -DCMAKE_BUILD_TYPE=RELEASE
+  LOG_DOWNLOAD ON
+  LOG_CONFIGURE ON
+  LOG_BUILD ON
+  UPDATE_COMMAND ""
+)
 
 ExternalProject_Add(
   gflags
@@ -60,8 +72,8 @@ if (NOT ACCELERATE)
 endif()
 
 
-add_executable(bgess main.cpp)
-add_dependencies(bgess googlebenchmark gflags gtest)
+add_executable(bgess main.cpp ulp.cc)
+add_dependencies(bgess googlebenchmark gflags gtest eigen)
 
 ExternalProject_Get_Property(gflags install_dir)
 include_directories(${install_dir}/include)
@@ -78,5 +90,8 @@ target_link_libraries(bgess ${install_dir}/lib/libgtest.a)
 ExternalProject_Get_Property(glog install_dir)
 include_directories(${install_dir}/include)
 target_link_libraries(bgess ${install_dir}/lib/libglog.a)
+
+ExternalProject_Get_Property(eigen install_dir)
+include_directories(${install_dir}/include)
 
 target_link_libraries(bgess ${ACCELERATE})

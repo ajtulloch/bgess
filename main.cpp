@@ -20,7 +20,7 @@
 
 namespace caffe2 {
 
-constexpr size_t k2b1bXBits = 2;
+  // constexpr size_t k2b1bXBits = 2;
 
 // How do we effiecintly quantize? One approach:
 
