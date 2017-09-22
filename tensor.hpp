@@ -61,7 +61,7 @@ inline void CopyMatrix<CPUContext>(const size_t itemsize, const int M, const int
 
 }  // namespace math
 
-template <class T, size_t kAlignment = 32>
+template <class T, size_t kAlignment = 64>
 struct AlignedAllocator {
   typedef T value_type;
 
@@ -130,13 +130,14 @@ class TensorCPU {
     CHECK_EQ(n, size());
     std::memcpy(mutable_data<uint8_t>(), data, n);
   }
+
   template <typename T>
-  T* mutable_data() {
+  __attribute__((noinline)) T* mutable_data() {
     if (data_.size() != size() * sizeof(T)) {
       data_.resize(size() * sizeof(T));
     }
     CHECK_EQ(size() * sizeof(T), data_.size()) << dims_;
-    return (T*)data_.data();
+    return reinterpret_cast<T*>(data_.data());
   }
   size_t capacity_{0};
   std::vector<size_t> dims_;

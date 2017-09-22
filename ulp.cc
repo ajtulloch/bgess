@@ -102,7 +102,7 @@ void qconv(const ConvArgs& args,
             }
           }
           Ydata[oc + OC * ow + OC * OW * oh + n * OC * OW * OH] =
-              KW * KH * KC * 8 - 2 * acc + (b ? b->data<float>()[oc] : 0.0);
+            float(KW * KH * KC * 8) - float(2 * acc) + (b ? b->data<float>()[oc] : 0.0);
           ;
         }
       }
@@ -171,8 +171,8 @@ void filterNormalization11(const TensorCPU& WQ, TensorCPU* WQN) {
     for (auto j = 0; j < WQs; ++j) {
       bitSum += __builtin_popcount(WQdata[f * WQs + j]);
     }
-    DCHECK_LE(bitSum, WQbits);
-    WQNdata[f] = 2 * bitSum - WQbits;
+    CHECK_LE(bitSum, WQbits);
+    WQNdata[f] = float(2 * bitSum) - float(WQbits);
   }
 }
 
@@ -316,29 +316,16 @@ void run2b1bConvGeneric(QConvState* state, const ConvArgs& args, const TensorCPU
                      state->bias ? state->bias->data<float>() : nullptr);
 }
 
-void run2b1bUnification(QConvState* state,
-                        size_t N,
-                        size_t C,
-                        const float* WQNVdata,
-                        const float* YQs0Vdata,
-                        const float* YQs1Vdata,
-                        size_t YQstride,
-                        float* Ydata,
-                        size_t Ystride,
-                        const float* bias) {
-  ConstEigenVectorArrayMap<float> WQNV(WQNVdata, C);
-
+__attribute__((noinline)) void run2b1bUnification(
+    QConvState* state, size_t N, size_t C, const float* WQNVdata,
+    const float* YQs0Vdata, const float* YQs1Vdata, size_t YQstride,
+    float* Ydata, size_t Ystride, const float* bias) {
   for (size_t j = 0; j < N; ++j) {
-    ConstEigenVectorArrayMap<float> YQs0V(YQs0Vdata + YQstride * j, C);
-    ConstEigenVectorArrayMap<float> YQs1V(YQs1Vdata + YQstride * j, C);
-    EigenVectorArrayMap<float> YNV(Ydata + Ystride * j, C);
-    if (bias) {
-      ConstEigenVectorArrayMap<float> BV(bias, C);
-      YNV = (std::pow<float>(2, k2b1bXBits) - 1) / 2 * WQNV + std::pow<float>(2, -1) * YQs0V +
-            std::pow<float>(2, 0) * YQs1V + BV;
-    } else {
-      YNV = (std::pow<float>(2, k2b1bXBits) - 1) / 2 * WQNV + std::pow<float>(2, -1) * YQs0V +
-            std::pow<float>(2, 0) * YQs1V;
+    for (size_t c = 0; c < C; ++c) {
+      const auto v = float(3.0 / 2) * WQNVdata[c] +
+                     0.5 * YQs0Vdata[YQstride * j + c] +
+                     YQs1Vdata[YQstride * j + c] + (bias ? bias[c] : 0.0);
+      Ydata[Ystride * j + c] = v;
     }
   }
 }

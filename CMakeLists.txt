@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 2.8.9)
 project(bgess)
 set(CMAKE_CXX_STANDARD 14)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-SET(CMAKE_CXX_FLAGS  "${CMAKE_CXX_FLAGS} -mavx2 -march=haswell -Wno-c++11-narrowing")
+SET(CMAKE_CXX_FLAGS  "${CMAKE_CXX_FLAGS} -mavx2 -march=haswell -Wno-c++11-narrowing -fsanitize=address -fno-strict-aliasing -DEIGEN_NO_ALIGN=1 -DEIGEN_DONT_VECTORIZE=1")
 
 INCLUDE(ExternalProject)
 
@@ -72,7 +72,7 @@ if (NOT ACCELERATE)
 endif()
 
 
-add_executable(bgess main.cpp ulp.cc)
+add_executable(bgess main.cpp ulp.cc ulp_test.cc)
 add_dependencies(bgess googlebenchmark gflags gtest eigen)
 
 ExternalProject_Get_Property(gflags install_dir)
