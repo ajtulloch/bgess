@@ -102,8 +102,8 @@ void qconv(const ConvArgs& args,
             }
           }
           Ydata[oc + OC * ow + OC * OW * oh + n * OC * OW * OH] =
-            float(KW * KH * KC * 8) - float(2 * acc) + (b ? b->data<float>()[oc] : 0.0);
-          ;
+              float(KW * KH * KC * 8) - float(2 * acc) +
+              (b ? b->data<float>()[oc] : 0.0);
         }
       }
     }

@@ -189,7 +189,7 @@ __attribute__((noinline)) void qgemm_nt_packed(const TensorCPU& A,
   if (tilesPerBlock < 1) {
     tilesPerBlock = 1;
   }
-  CHECK_LT(K, std::pow(2, 16));
+  CHECK_LE(K, std::pow(2, 16));
   CHECK_EQ(M % TileSize, 0);
   CHECK_EQ(N % TileSize, 0);
   const size_t MNumTiles = M / TileSize;

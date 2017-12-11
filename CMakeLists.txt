@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 2.8.9)
 project(bgess)
 set(CMAKE_CXX_STANDARD 14)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-SET(CMAKE_CXX_FLAGS  "${CMAKE_CXX_FLAGS} -mavx2 -march=haswell -Wno-c++11-narrowing -fsanitize=address -fno-strict-aliasing -DEIGEN_NO_ALIGN=1 -DEIGEN_DONT_VECTORIZE=1")
+SET(CMAKE_CXX_FLAGS  "${CMAKE_CXX_FLAGS} -mavx2 -march=native -Wno-c++11-narrowing")
 
 INCLUDE(ExternalProject)
 

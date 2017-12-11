@@ -1220,7 +1220,7 @@ static void BM_sgemm(benchmark::State& state) {
 }
 
 constexpr size_t kQKLowerBound = 64;
-constexpr size_t kQKUpperBound = 1024;
+constexpr size_t kQKUpperBound = 8192;
 
 static void GessArguments(benchmark::internal::Benchmark* b) {
   for (int M = 2; M <= 64; M *= 4) {
